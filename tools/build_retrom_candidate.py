@@ -26,9 +26,10 @@ def run(*args, **kwargs):
 def git(*args):
     if not (ROOT / ".git").exists():
         identity = json.loads((ROOT / ".retrom-source.json").read_text())
+        dirty = identity["dirty"] or source_rows() != identity["rows"]
         return {("branch", "--show-current"): identity["branch"],
                 ("rev-parse", "HEAD"): identity["commit"],
-                ("status", "--porcelain"): "modified source snapshot" if identity["dirty"] else ""}[args]
+                ("status", "--porcelain"): "modified source snapshot" if dirty else ""}[args]
     return subprocess.check_output(["git", *args], cwd=ROOT).decode().strip()
 
 
@@ -42,13 +43,19 @@ def sources():
     return sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard", "-z").split("\0")) - {""})
 
 
-def tree_digest():
+def source_rows():
     rows = {} if (ROOT / ".git").exists() else {r["path"]: r for r in json.loads((ROOT / ".retrom-source.json").read_text())["rows"]}
     for name in sources():
         path = ROOT / name
         if path.is_file():
             rows[name] = {"path": name, "mode": "100755" if path.stat().st_mode & 0o111 else "100644", "sha256": digest(path)}
-    return hashlib.sha256(json.dumps([rows[name] for name in sorted(rows)], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+        else:
+            rows.pop(name, None)
+    return [rows[name] for name in sorted(rows)]
+
+
+def tree_digest():
+    return hashlib.sha256(json.dumps(source_rows(), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
 def fetch_verified(url, path, expected):
@@ -70,12 +77,9 @@ def build_input(name):
 
 def archive(output, packages):
     files = [name for name in sources() if build_input(name) and (ROOT / name).is_file()]
-    rows = [{"path": name, "mode": "100755" if (ROOT / name).stat().st_mode & 0o111 else "100644",
-             "sha256": digest(ROOT / name)} for name in sources() if (ROOT / name).is_file()]
+    rows = source_rows()
     identity = {"files": files, "rows": rows, "branch": git("branch", "--show-current"),
                 "commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain"))}
-    if not (ROOT / ".git").exists():
-        identity["rows"] = json.loads((ROOT / ".retrom-source.json").read_text())["rows"]
     entries = {name: (ROOT / name, None) for name in files}
     entries[".retrom-source.json"] = (None, (json.dumps(identity, sort_keys=True, indent=2) + "\n").encode())
     # Include the complete selected registry/build source, preserving embedded notices.

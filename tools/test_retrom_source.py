@@ -3,6 +3,7 @@ from pathlib import Path
 import gzip
 import io
 import json
+import hashlib
 import tarfile
 import tempfile
 import unittest
@@ -10,6 +11,29 @@ from unittest.mock import patch
 import build_retrom_candidate as builder
 
 class SourceTests(unittest.TestCase):
+    def test_modified_extracted_source_updates_identity_and_keeps_omitted_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / 'Cargo.lock'; source.write_text('original')
+            rows = [dict(path='Cargo.lock', mode='100644', sha256=builder.digest(source)),
+                    dict(path='src/raw/research.txt', mode='100644', sha256='a' * 64)]
+            (root / '.retrom-source.json').write_text(json.dumps(dict(files=['Cargo.lock'], rows=rows,
+                branch='feat/source', commit='b' * 40, dirty=False)))
+            with patch.object(builder, 'ROOT', root):
+                self.assertEqual(builder.git('status', '--porcelain'), '')
+                original = builder.tree_digest(); source.write_text('modified')
+                self.assertNotEqual(builder.tree_digest(), original)
+                self.assertNotEqual(builder.git('status', '--porcelain'), '')
+                builder.archive(root / 'modified.tar.gz', [])
+                with tarfile.open(root / 'modified.tar.gz') as archive:
+                    identity = json.load(archive.extractfile('ethornell/.retrom-source.json'))
+                self.assertEqual(identity['rows'][0]['sha256'], builder.digest(source))
+                self.assertEqual(identity['rows'][1], rows[1])
+                self.assertTrue(identity['dirty'])
+                actual = hashlib.sha256(json.dumps(identity['rows'], sort_keys=True,
+                    separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+                self.assertEqual(actual, builder.tree_digest())
+
     def test_archive_is_complete_deterministic_and_excludes_user_data(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
