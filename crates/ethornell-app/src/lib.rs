@@ -36,9 +36,9 @@ mod font_transform;
 mod game_font;
 mod graph_defaults;
 mod graph_effect;
-#[cfg(not(any(target_os = "vita", target_os = "horizon")))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "vita", target_os = "horizon")))]
 mod graph_flash;
-#[cfg(any(target_os = "vita", target_os = "horizon"))]
+#[cfg(any(target_arch = "wasm32", target_os = "vita", target_os = "horizon"))]
 #[path = "graph_flash_console.rs"]
 mod graph_flash;
 mod graph_group;

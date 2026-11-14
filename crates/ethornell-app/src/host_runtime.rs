@@ -419,12 +419,16 @@ impl HostRuntime {
         }
         Ok(())
     }
+    /// Native game dimensions, independent of the host viewport.
+    pub fn screen_dimensions(&self) -> (u32, u32) {
+        (self.runtime.api.screen_width.max(1) as u32, self.runtime.api.screen_height.max(1) as u32)
+    }
     /// One line of state for host-side debugging: the last VM stop, the
     /// engine clock and what the presenter has to draw.
     pub fn diagnostics(&self) -> String {
         let report = self.runtime.last_report.as_ref();
         format!(
-            "stop={:?} pc={} steps={} time_ms={} screen={}x{} surfaces={} textures={} renderer={} pending={} program={:?} vm={:?} image_bytes={} blob_bytes={} program_cache={} cached_instructions={} vm_programs={} vm_instructions={} movies={:?} engine_frames={}",
+            "stop={:?} pc={} steps={} time_ms={} screen={}x{} surfaces={} textures={} renderer={} pending={} program={:?} vm={:?} image_bytes={} blob_bytes={} program_cache={} cached_instructions={} vm_programs={} vm_instructions={} movies={:?} engine_frames={} recent={:?}",
             report.map(|r| r.stop_reason),
             report.map_or(0, |r| r.pc),
             report.map_or(0, |r| r.steps),
@@ -465,6 +469,7 @@ impl HostRuntime {
                 .sum::<usize>(),
             self.runtime.api.graph_effects.movie_diagnostics(),
             self.engine_frames,
+            report.map(|r| r.recent_trace.iter().rev().take(16).collect::<Vec<_>>()),
         )
     }
     /// The game text font, for renderers the host builds itself.

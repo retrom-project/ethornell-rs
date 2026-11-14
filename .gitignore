@@ -39,3 +39,11 @@ docs/
 *.jks
 *.keystore
 *.p12
+
+/platform/retrom/node_modules/
+
+# Native player user files must never enter source distributions.
+**/.ethornell-platform-store
+**/BGI.gdb
+**/BGI[0-9]*.cad
+**/__pycache__/

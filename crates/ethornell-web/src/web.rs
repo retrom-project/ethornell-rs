@@ -224,6 +224,10 @@ impl WebEngine {
         Ok(Self { host, generation: 0 })
     }
 
+    pub fn width(&self) -> u32 { self.host.screen_dimensions().0 }
+
+    pub fn height(&self) -> u32 { self.host.screen_dimensions().1 }
+
     pub fn font(&self) -> WebFont {
         WebFont(self.host.font())
     }

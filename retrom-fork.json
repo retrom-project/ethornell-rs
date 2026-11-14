@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "forkRepository": "https://github.com/retrom-project/ethornell-rs",
+  "defaultBranch": "retrom/g7cfc2fba8261",
+  "upstreamMirrorBranch": "main",
+  "upstreams": [
+    {
+      "role": "engine",
+      "repository": "https://github.com/xmoezzz/ethornell-rs",
+      "refType": "COMMIT",
+      "ref": "7cfc2fba8261e59c68095ab1ddc4f1f3534c27d8",
+      "commit": "7cfc2fba8261e59c68095ab1ddc4f1f3534c27d8"
+    }
+  ],
+  "releaseTagPattern": "^retrom-core-g7cfc2fba8261-r[1-9][0-9]*(-rc\\.[1-9][0-9]*)?$",
+  "adapterAbi": "ethornell-host-v1",
+  "releaseAssets": [
+    "ethornell.mjs",
+    "ethornell-worker.mjs",
+    "audio-worklet.mjs",
+    "ethornell_bg.wasm",
+    "font.ttf",
+    "LICENSE-MPL-2.0",
+    "FONT-OFL.txt",
+    "THIRD-PARTY-NOTICES.md",
+    "ethornell-source.tar.gz",
+    "rpg-runtime-release.json"
+  ]
+}

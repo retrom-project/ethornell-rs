@@ -87,22 +87,8 @@ fn relative(name: &str) -> Option<PathBuf> {
     Some(path.to_owned())
 }
 
-// Some BGI scripts build their user-data directory from the primary install
-// root. This conventional user-data subtree and the engine's global database
-// are writable virtual aliases. BGI.gdb defaults to the install root when the
-// script has not set a validated user-data root (80:80/81, sub_46B960).
-// Arbitrary resource-root names remain read-only. These aliases never denote
-// host IO in the resource directory and never import original save bytes.
-pub(crate) fn user_data_alias(name: &str) -> String {
-    let normalized=name.replace('\\',"/");
-    if let Some(rest)=normalized.strip_prefix("bgi-resource/") {
-        let first=rest.split('/').next().unwrap_or("");
-        if first.eq_ignore_ascii_case("UserData") || rest.eq_ignore_ascii_case("BGI.gdb") {
-            return format!("bgi-user/{rest}");
-        }
-    }
-    normalized
-}
+mod user_alias;
+pub(crate) use user_alias::user_data_alias;
 
 #[cfg(fd_policy)]
 unsafe fn errno_ptr() -> *mut libc::c_int {

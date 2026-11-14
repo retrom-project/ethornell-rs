@@ -1,4 +1,4 @@
-//! ActiveX Flash is unavailable on console targets. Preserve the native
+//! ActiveX Flash is unavailable on browser and console targets. Preserve the native
 //! unsupported/load-failure status instead of allocating a blank fake control.
 use ethornell_image::DecodedImage;
 #[derive(Debug, Default)]

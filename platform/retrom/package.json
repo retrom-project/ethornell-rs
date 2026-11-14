@@ -1,0 +1,1 @@
+{"private":true,"type":"module","license":"MPL-2.0","scripts":{"test":"node --test *.test.mjs"},"devDependencies":{"esbuild":"0.27.0"}}
