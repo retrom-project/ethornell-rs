@@ -47,6 +47,31 @@ impl Default for RuntimeGraphConfig {
 }
 
 impl RuntimeGraphConfig {
+    pub(crate) fn text_property(&self, property: u32, default: i32) -> i32 {
+        self.text_global_properties
+            .get(&property)
+            .copied()
+            .unwrap_or(default)
+    }
+
+    /// Native 4397C0/43B08B: this is a signed multiplier, not a switch.
+    pub(crate) fn text_kinsoku_margin(&self, font_height: i32) -> i32 {
+        font_height.wrapping_mul(self.text_property(0x8000_0007, 1))
+    }
+
+    pub(crate) fn text_hanging_ignores_margin(&self) -> bool {
+        self.text_property(0, 1) != 0
+    }
+
+    /// 43D270 -> 43D8F0: ruby starts at the body's shadow/glow inset.
+    pub(crate) fn text_ruby_effect_inset(&self, dx: i32, dy: i32) -> (f32, f32) {
+        if self.text_property(0x8000_0008, 0) != 0 {
+            (dx.max(1) as f32, dy.max(1) as f32)
+        } else {
+            (0.0, 0.0)
+        }
+    }
+
     pub(crate) fn register_font(&mut self, registration: RuntimeFontRegistration) -> bool {
         if registration.font_name_id != 0
             && (!(4..=200).contains(&registration.height)

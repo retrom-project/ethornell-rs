@@ -10,7 +10,7 @@ impl RuntimeTraceApi {
             return None;
         }
         if id <= 0x1F {
-            return self.dispatch_system91_03_1f(call);
+            return self.dispatch_system91_00_1f(call);
         }
         if matches!(
             id,

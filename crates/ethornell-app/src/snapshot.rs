@@ -41,7 +41,7 @@ fn check_session_coverage(text: &str) {
 fn check_font_coverage(font: &FontArc, text: impl IntoIterator<Item = char>) {
     if text
         .into_iter()
-        .any(|ch| !ch.is_control() && font.glyph_id(ch).0 == 0)
+        .any(|ch| !ch.is_control() && !crate::glyph_images::handled(ch) && font.glyph_id(ch).0 == 0)
     {
         MISSING_GLYPHS.with(|missing| missing.set(true));
     }
@@ -71,10 +71,16 @@ pub(crate) fn load_game_font(root: &Path, gbk: bool) -> Result<FontArc> {
     if let Some(path) = std::env::var_os("ETHORNELL_FONT") {
         match ethornell_render::FontProvider::load_file(&path, 0) {
             Ok(font) => return Ok(font),
-            Err(error) => tracing::warn!(?path, %error, "explicit text font unusable; trying game and system fonts"),
+            Err(error) => {
+                tracing::warn!(?path, %error, "explicit text font unusable; trying game and system fonts")
+            }
         }
     }
-    let required = if gbk { "A日本語中文简体繁體" } else { "A日本語中文" };
+    let required = if gbk {
+        "A日本語中文简体繁體"
+    } else {
+        "A日本語中文"
+    };
     if let Some(font) = super::game_font::load(root, required) {
         return Ok(font);
     }
@@ -311,7 +317,13 @@ pub(crate) fn compose_runtime_frame_through_priority(
     include_text: bool,
     maximum_priority: Option<i32>,
 ) -> DecodedImage {
-    compose_runtime_region(api, include_text, maximum_priority, [0, 0], runtime_frame_size(api))
+    compose_runtime_region(
+        api,
+        include_text,
+        maximum_priority,
+        [0, 0],
+        runtime_frame_size(api),
+    )
 }
 
 /// The same retained scene traversal, in a caller-supplied bitmap viewport.
@@ -324,6 +336,7 @@ pub(crate) fn compose_runtime_region(
     origin: [i32; 2],
     size: (u32, u32),
 ) -> DecodedImage {
+    let _glyph_session = api.glyph_images.enter_session();
     let (width, height) = size;
     let Some(mut out) = new_raster(width, height) else {
         return DecodedImage {
@@ -385,7 +398,11 @@ pub(crate) fn compose_runtime_region(
                 let clip = node
                     .target_surface
                     .and_then(|surface| api.surface_chain_clip(surface))
-                    .map(|mut clip| { clip.x -= origin[0] as f32; clip.y -= origin[1] as f32; clip });
+                    .map(|mut clip| {
+                        clip.x -= origin[0] as f32;
+                        clip.y -= origin[1] as f32;
+                        clip
+                    });
                 draw_transformed_text_node(
                     &mut out,
                     &positioned,
@@ -416,6 +433,7 @@ pub(crate) fn compose_graph_object(
     object: i32,
     target_size: Option<(u32, u32)>,
 ) -> Option<DecodedImage> {
+    let _glyph_session = api.glyph_images.enter_session();
     let surface = api.graph_surfaces.get(&object);
     let selected_layers = api
         .graph_layers
@@ -551,6 +569,7 @@ pub(crate) fn compose_graph_object(
             let (surface_x, surface_y) = api.surface_world_position(surface);
             positioned.x += surface_x;
             positioned.y += surface_y;
+            positioned.color[3] *= api.surface_display_opacity(surface);
         }
         positioned.x -= origin_x;
         positioned.y -= origin_y;
@@ -580,9 +599,15 @@ fn translated_item(mut item: RuntimeGraphDrawItem, origin: [i32; 2]) -> RuntimeG
     item.x -= origin[0] as f32;
     item.y -= origin[1] as f32;
     if let Some(quad) = item.destination_quad.as_mut() {
-        for point in quad { point[0] -= origin[0] as f32; point[1] -= origin[1] as f32; }
+        for point in quad {
+            point[0] -= origin[0] as f32;
+            point[1] -= origin[1] as f32;
+        }
     }
-    if let Some(clip) = item.clip.as_mut() { clip.x -= origin[0] as f32; clip.y -= origin[1] as f32; }
+    if let Some(clip) = item.clip.as_mut() {
+        clip.x -= origin[0] as f32;
+        clip.y -= origin[1] as f32;
+    }
     item
 }
 
@@ -598,14 +623,22 @@ fn capture_draw_item(
     {
         // Sprite captures use the same masked/filtered output as presentation.
         // Work-bitmap copies never capture the hidden mask as a second image.
-        let mut item = api.graph_output_draw_items().into_iter()
+        let mut item = api
+            .graph_output_draw_items()
+            .into_iter()
             .find(|item| item.owner_object == Some(layer_id))?;
         item.x -= origin_x;
         item.y -= origin_y;
         if let Some(quad) = item.destination_quad.as_mut() {
-            for point in quad { point[0] -= origin_x; point[1] -= origin_y; }
+            for point in quad {
+                point[0] -= origin_x;
+                point[1] -= origin_y;
+            }
         }
-        if let Some(clip) = item.clip.as_mut() { clip.x -= origin_x; clip.y -= origin_y; }
+        if let Some(clip) = item.clip.as_mut() {
+            clip.x -= origin_x;
+            clip.y -= origin_y;
+        }
         return Some(item);
     }
     if !layer.enabled || !api.object_enabled_for_layer(layer.owner_object) {
@@ -715,6 +748,44 @@ pub(crate) fn draw_text_node(
     draw_transformed_text_node(dst, node, layout, shadow, clip, None);
 }
 
+/// Nodes containing bitmap glyphs share the CPU raster with snapshots. The
+/// resulting transparent texture retains native priority and pixel colours.
+pub(crate) fn glyph_text_image(
+    api: &RuntimeTraceApi,
+    node: &crate::text::RuntimeTextNode,
+) -> Result<DecodedImage> {
+    let _session = api.glyph_images.enter_session();
+    let (width, height) = runtime_frame_size(api);
+    let mut image = new_raster(width, height)
+        .ok_or_else(|| EthornellError::Other("glyph text frame allocation failed".into()))?;
+    let mut positioned = node.clone();
+    positioned.style_spans = api.text_node_style_spans(node);
+    if let Some(surface) = node
+        .target_surface
+        .filter(|id| api.graph_surfaces.contains_key(id))
+    {
+        let (x, y) = api.surface_world_position(surface);
+        positioned.x += x;
+        positioned.y += y;
+        positioned.color[3] *= api.surface_display_opacity(surface);
+    }
+    let clip = node
+        .target_surface
+        .and_then(|surface| api.surface_chain_clip(surface));
+    draw_transformed_text_node(
+        &mut image,
+        &positioned,
+        api.formatted_text_layout(node),
+        api.text_node_shadow(node),
+        clip,
+        api.named_font_transform(node.target_surface),
+    );
+    if let Some(error) = take_raster_error() {
+        return Err(EthornellError::Other(error));
+    }
+    Ok(image)
+}
+
 fn draw_transformed_text_node(
     dst: &mut DecodedImage,
     node: &crate::text::RuntimeTextNode,
@@ -757,12 +828,46 @@ fn draw_transformed_text_node(
         let color = runtime_text_style_color(node.color, style);
         let bold = style.is_some_and(|style| style.style.bold);
         let italic = style.is_some_and(|style| style.style.italic);
+        let image = crate::glyph_images::current(ch);
         let glyph_id = font.glyph_id(ch);
-        let advance = scaled.h_advance(glyph_id).max(node.size * 0.5)
-            + transform.map_or(0.0, |t| t.advance_adjustment(node.size));
+        let advance = if crate::glyph_images::handled(ch) {
+            image.as_ref().map_or(0.0, |image| image.width as f32)
+        } else {
+            scaled.h_advance(glyph_id).max(node.size * 0.5)
+        } + transform.map_or(0.0, |t| t.advance_adjustment(node.size));
         if x + advance > max_x {
             x = node.x;
             y += line_height;
+        }
+        if crate::glyph_images::handled(ch) {
+            let effect = message_effect.or_else(|| {
+                resolve_text_shadow(default_shadow, node.size).map(|(dx, dy, alpha)| TextShadow {
+                    mode: 1,
+                    dx,
+                    dy,
+                    rgb: 0,
+                    concentration: (alpha * 256.0).round() as i32,
+                })
+            });
+            rasterize_transformed_glyph_records_clipped(
+                dst,
+                2,
+                &[crate::text_layout::PlacedGlyph {
+                    ch,
+                    index: char_index,
+                    x,
+                    y: y - scaled.ascent(),
+                }],
+                node.size,
+                color,
+                &|_| None,
+                effect,
+                transform,
+                clip,
+            );
+            x += advance;
+            char_index += 1;
+            continue;
         }
         if let Some(effect) = message_effect.filter(|effect| effect.mode == 2) {
             let placed = crate::text_layout::PlacedGlyph {
@@ -821,7 +926,9 @@ fn draw_transformed_text_node(
                 transform,
             );
         }
-        draw_transformed_glyph(dst, &font, glyph, color, 0, 0, bold, italic, clip, transform);
+        draw_transformed_glyph(
+            dst, &font, glyph, color, 0, 0, bold, italic, clip, transform,
+        );
         x += advance;
         char_index += 1;
     }
@@ -860,6 +967,28 @@ fn draw_text_run(
     let scaled = font.as_scaled(scale);
     let baseline = y + scaled.ascent();
     for ch in text.chars() {
+        if crate::glyph_images::handled(ch) {
+            let advance = crate::glyph_images::current(ch).map_or(0.0, |image| image.width as f32);
+            rasterize_transformed_glyph_records_clipped(
+                dst,
+                2,
+                &[crate::text_layout::PlacedGlyph { ch, index: 0, x, y }],
+                size,
+                color,
+                &|_| None,
+                resolve_text_shadow(shadow, size).map(|(dx, dy, alpha)| TextShadow {
+                    mode: 1,
+                    dx,
+                    dy,
+                    rgb: 0,
+                    concentration: (alpha * 256.0).round() as i32,
+                }),
+                None,
+                clip,
+            );
+            x += advance;
+            continue;
+        }
         let glyph_id = font.glyph_id(ch);
         let advance = scaled.h_advance(glyph_id).max(size * 0.5);
         let glyph = glyph_id.with_scale_and_position(scale, point(x, baseline));
@@ -970,6 +1099,23 @@ pub(crate) fn rasterize_bitmap_text(
         if ch == '\n' {
             x = start_x as f32;
             line_y += line_height;
+            continue;
+        }
+        if crate::glyph_images::handled(ch) {
+            let advance = crate::glyph_images::current(ch).map_or(0.0, |image| image.width as f32);
+            rasterize_placed_glyphs(
+                dst,
+                &[crate::text_layout::PlacedGlyph {
+                    ch,
+                    index: 0,
+                    x,
+                    y: line_y,
+                }],
+                size,
+                color,
+                &|_| None,
+            );
+            x += advance * horizontal_scale + spacing;
             continue;
         }
         let glyph_id = font.glyph_id(ch);
@@ -1102,60 +1248,168 @@ pub(crate) fn layout_direct_bitmap_text(
 /// percentage, bold is Boolean, the ninth operand selects proportional cells,
 /// and the tenth is packed RGB. Wrapping reserves one full cell at the right.
 pub(crate) fn layout_styled_bitmap_text(
-    bytes:&[u8],origin:[i32;2],size:u32,width_percent:i32,bold:bool,
-    proportional:bool,packed_rgb:u32,wrap:bool,line_pitch_percent:i32,bitmap:[u32;2]
-)->(Vec<DirectTextGlyph>,i32) {
-    const HANGING:&str=",.､｡:;?!ﾞﾟ･、。，．：；？！゛゜‐]})）〕］｝〉》」』】‘“";
-    let mut glyphs=Vec::new();let (mut x,mut y)=(origin[0],origin[1]);let mut lines=1i32;
-    let (mut result,mut maximum)=(0i32,0i32);let mut hanging=false;let mut index=0;
-    let full=(size as i32).wrapping_mul(width_percent)/100;
-    let right=bitmap[0].wrapping_sub(full as u32);
-    let line_step=(size as i32).wrapping_add((size as i32).wrapping_mul(line_pitch_percent)/100);
-    let font=snapshot_font();let rgb=[(packed_rgb>>16) as u8,(packed_rgb>>8) as u8,packed_rgb as u8];
-    let mut allocated=0usize;
-    while index<bytes.len() && bytes[index]!=0 {
-        let lead=bytes[index];let double=lead>=0x80&&!(0xA0..0xE0).contains(&lead);
-        let n=if double {2}else{1};let end=(index+n).min(bytes.len());
-        let text=encoding_rs::SHIFT_JIS.decode(&bytes[index..end]).0.into_owned();let ch=text.chars().next().unwrap_or('\0');index=end;
-        if lead==10 {lines=lines.wrapping_add(1);x=origin[0];y=y.wrapping_add(line_step);hanging=false;if !wrap {maximum=maximum.max(result);result=0;}continue;}
+    bytes: &[u8],
+    origin: [i32; 2],
+    size: u32,
+    width_percent: i32,
+    bold: bool,
+    proportional: bool,
+    packed_rgb: u32,
+    wrap: bool,
+    line_pitch_percent: i32,
+    bitmap: [u32; 2],
+) -> (Vec<DirectTextGlyph>, i32) {
+    const HANGING: &str = ",.､｡:;?!ﾞﾟ･、。，．：；？！゛゜‐]})）〕］｝〉》」』】‘“";
+    let mut glyphs = Vec::new();
+    let (mut x, mut y) = (origin[0], origin[1]);
+    let mut lines = 1i32;
+    let (mut result, mut maximum) = (0i32, 0i32);
+    let mut hanging = false;
+    let mut index = 0;
+    let full = (size as i32).wrapping_mul(width_percent) / 100;
+    let right = bitmap[0].wrapping_sub(full as u32);
+    let line_step =
+        (size as i32).wrapping_add((size as i32).wrapping_mul(line_pitch_percent) / 100);
+    let font = snapshot_font();
+    let rgb = [
+        (packed_rgb >> 16) as u8,
+        (packed_rgb >> 8) as u8,
+        packed_rgb as u8,
+    ];
+    let mut allocated = 0usize;
+    while index < bytes.len() && bytes[index] != 0 {
+        let lead = bytes[index];
+        let double = lead >= 0x80 && !(0xA0..0xE0).contains(&lead);
+        let n = if double { 2 } else { 1 };
+        let end = (index + n).min(bytes.len());
+        let text = encoding_rs::SHIFT_JIS
+            .decode(&bytes[index..end])
+            .0
+            .into_owned();
+        let ch = text.chars().next().unwrap_or('\0');
+        index = end;
+        if lead == 10 {
+            lines = lines.wrapping_add(1);
+            x = origin[0];
+            y = y.wrapping_add(line_step);
+            hanging = false;
+            if !wrap {
+                maximum = maximum.max(result);
+                result = 0;
+            }
+            continue;
+        }
         check_session_coverage(&text);
-        let nominal=if double {full}else{full/2};
-        let Some(mut cell)=new_raster((2*full).max(1) as u32,size) else{return (Vec::new(),0);};
-        allocated=allocated.saturating_add(cell.rgba.len());if allocated>MAX_RASTER_BYTES {record_raster_error("styled text cell budget exceeded");return (Vec::new(),0);}
-        let mut ink_left=cell.width;let mut ink_right=0u32;let mut has_ink=false;
-        if let Some(font)=&font {
-            let scale=PxScale{x:size as f32*width_percent as f32/100.0,y:size as f32};
-            let baseline=font.as_scaled(scale).ascent();
-            if let Some(outlined)=font.outline_glyph(font.glyph_id(ch).with_scale_and_position(scale,point(0.0,baseline))) {
-                let bounds=outlined.px_bounds();
-                if valid_glyph_bounds(bounds) {outlined.draw(|gx,gy,coverage|{
-                    let py=bounds.min.y as i32+gy as i32;let px=bounds.min.x as i32+gx as i32;
-                    let alpha=(coverage.clamp(0.0,1.0)*255.0).round() as u8;
-                    if py<0||py>=size as i32||alpha==0 {return;}
-                    for dx in 0..=i32::from(bold) {let px=px+dx;if px<0||px>=cell.width as i32 {continue;}
-                        let at=(py as usize*cell.width as usize+px as usize)*4;
-                        if alpha>cell.rgba[at+3] {cell.rgba[at..at+4].copy_from_slice(&[rgb[0],rgb[1],rgb[2],alpha]);}
-                        has_ink=true;ink_left=ink_left.min(px as u32);ink_right=ink_right.max(px as u32);
-                    }
-                });}
+        let nominal = if double { full } else { full / 2 };
+        let Some(mut cell) = new_raster((2 * full).max(1) as u32, size) else {
+            return (Vec::new(), 0);
+        };
+        allocated = allocated.saturating_add(cell.rgba.len());
+        if allocated > MAX_RASTER_BYTES {
+            record_raster_error("styled text cell budget exceeded");
+            return (Vec::new(), 0);
+        }
+        let mut ink_left = cell.width;
+        let mut ink_right = 0u32;
+        let mut has_ink = false;
+        if let Some(font) = &font {
+            let scale = PxScale {
+                x: size as f32 * width_percent as f32 / 100.0,
+                y: size as f32,
+            };
+            let baseline = font.as_scaled(scale).ascent();
+            if let Some(outlined) = font.outline_glyph(
+                font.glyph_id(ch)
+                    .with_scale_and_position(scale, point(0.0, baseline)),
+            ) {
+                let bounds = outlined.px_bounds();
+                if valid_glyph_bounds(bounds) {
+                    outlined.draw(|gx, gy, coverage| {
+                        let py = bounds.min.y as i32 + gy as i32;
+                        let px = bounds.min.x as i32 + gx as i32;
+                        let alpha = (coverage.clamp(0.0, 1.0) * 255.0).round() as u8;
+                        if py < 0 || py >= size as i32 || alpha == 0 {
+                            return;
+                        }
+                        for dx in 0..=i32::from(bold) {
+                            let px = px + dx;
+                            if px < 0 || px >= cell.width as i32 {
+                                continue;
+                            }
+                            let at = (py as usize * cell.width as usize + px as usize) * 4;
+                            if alpha > cell.rgba[at + 3] {
+                                cell.rgba[at..at + 4]
+                                    .copy_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
+                            }
+                            has_ink = true;
+                            ink_left = ink_left.min(px as u32);
+                            ink_right = ink_right.max(px as u32);
+                        }
+                    });
+                }
             }
         }
-        let (cell_width,crop_x,padding)=if proportional {
-            let ink_width=if has_ink {(ink_right-ink_left+1) as i32}else{nominal.max(0)};
-            let ratio=16*ink_width/(size as i32).max(1);let padding=if ratio>=8 {1}else{[4,4,4,3,3,3,3,2][ratio.max(0) as usize]};
-            (ink_width,if has_ink {ink_left as i32}else{0},padding)
-        }else{(nominal,0,0)};
-        let step=cell_width.wrapping_add(2*padding);
-        if wrap && x.wrapping_add(step) as u32>right {
-            if hanging||!HANGING.contains(ch) {y=y.wrapping_add(line_step);lines=lines.wrapping_add(1);x=origin[0];hanging=false;}else{hanging=true;}
+        let (cell_width, crop_x, padding) = if proportional {
+            let ink_width = if has_ink {
+                (ink_right - ink_left + 1) as i32
+            } else {
+                nominal.max(0)
+            };
+            let ratio = 16 * ink_width / (size as i32).max(1);
+            let padding = if ratio >= 8 {
+                1
+            } else {
+                [4, 4, 4, 3, 3, 3, 3, 2][ratio.max(0) as usize]
+            };
+            (
+                ink_width,
+                if has_ink { ink_left as i32 } else { 0 },
+                padding,
+            )
+        } else {
+            (nominal, 0, 0)
+        };
+        let step = cell_width.wrapping_add(2 * padding);
+        if wrap && x.wrapping_add(step) as u32 > right {
+            if hanging || !HANGING.contains(ch) {
+                y = y.wrapping_add(line_step);
+                lines = lines.wrapping_add(1);
+                x = origin[0];
+                hanging = false;
+            } else {
+                hanging = true;
+            }
         }
-        let draw_x=x.wrapping_add(padding);
-        if draw_x as i64>=bitmap[0] as i64||y as i64>=bitmap[1] as i64||draw_x as i64+cell_width as i64<=0||y as i64+size as i64<=0 {break;}
-        let cropped=crate::graph::crop_decoded_image(&cell,crate::graph::RuntimeClipRect{x:crop_x as f32,y:0.0,width:cell_width.max(1) as f32,height:size as f32});
-        glyphs.push(DirectTextGlyph{x:draw_x,y,cell:cropped});x=x.wrapping_add(step);
-        if wrap {result=lines;}else{result=result.wrapping_add(step);}
+        let draw_x = x.wrapping_add(padding);
+        if draw_x as i64 >= bitmap[0] as i64
+            || y as i64 >= bitmap[1] as i64
+            || draw_x as i64 + cell_width as i64 <= 0
+            || y as i64 + size as i64 <= 0
+        {
+            break;
+        }
+        let cropped = crate::graph::crop_decoded_image(
+            &cell,
+            crate::graph::RuntimeClipRect {
+                x: crop_x as f32,
+                y: 0.0,
+                width: cell_width.max(1) as f32,
+                height: size as f32,
+            },
+        );
+        glyphs.push(DirectTextGlyph {
+            x: draw_x,
+            y,
+            cell: cropped,
+        });
+        x = x.wrapping_add(step);
+        if wrap {
+            result = lines;
+        } else {
+            result = result.wrapping_add(step);
+        }
     }
-    (glyphs,if wrap {result}else{maximum.max(result)})
+    (glyphs, if wrap { result } else { maximum.max(result) })
 }
 
 /// sub_42F790: draw one code with TextOut at (0, 0) into the font's
@@ -1223,13 +1477,17 @@ pub(crate) fn glyph_advance(ch: char, size: f32, horizontal_scale_percent: f32) 
         1.0
     };
     let size = size.max(1.0);
-    let base = match snapshot_font() {
-        Some(font) => font
-            .as_scaled(PxScale::from(size))
-            .h_advance(font.glyph_id(ch))
-            .max(size * 0.5),
-        None if ch.is_ascii() => size * 0.5,
-        None => size,
+    let base = if crate::glyph_images::handled(ch) {
+        crate::glyph_images::current(ch).map_or(0.0, |image| image.width as f32)
+    } else {
+        match snapshot_font() {
+            Some(font) => font
+                .as_scaled(PxScale::from(size))
+                .h_advance(font.glyph_id(ch))
+                .max(size * 0.5),
+            None if ch.is_ascii() => size * 0.5,
+            None => size,
+        }
     };
     base * scale
 }
@@ -1257,6 +1515,24 @@ pub(crate) fn rasterize_placed_glyphs(
             return;
         }
         let color = color_of(glyph.index).unwrap_or(color);
+        if crate::glyph_images::handled(glyph.ch) {
+            let Some(image) = crate::glyph_images::current(glyph.ch) else {
+                continue;
+            };
+            let mut image = (*image).clone();
+            apply_glyph_opacity(&mut image, color[3]);
+            crate::bitmap_blend::blit_mode(
+                dst,
+                2,
+                &image,
+                2,
+                glyph.x.round() as i32,
+                glyph.y.round() as i32,
+                0,
+                0,
+            );
+            continue;
+        }
         match font.as_ref() {
             Some(font) => {
                 let baseline = glyph.y + font.as_scaled(scale).ascent();
@@ -1313,8 +1589,25 @@ fn glyph_cell(
     if !valid_text_position(x, y) {
         return None;
     }
+    if crate::glyph_images::handled(ch) {
+        let image = crate::glyph_images::current(ch)?;
+        let (dx, dy) = transform.map_or((0.0, 0.0), |t| {
+            (
+                size * t.offset_x as f32 / 65536.0,
+                size * t.offset_y as f32 / 65536.0,
+            )
+        });
+        return Some((
+            (*image).clone(),
+            (x + dx).floor() as i32,
+            (y + dy).floor() as i32,
+        ));
+    }
     let ratios = transform.map_or([1.0; 2], |t| t.scales());
-    let scale = PxScale { x: size * ratios[0], y: size * ratios[1] };
+    let scale = PxScale {
+        x: size * ratios[0],
+        y: size * ratios[1],
+    };
     let baseline = (y + font.as_scaled(PxScale::from(size)).ascent()) * ratios[1];
     let outlined = font.outline_glyph(
         font.glyph_id(ch)
@@ -1339,10 +1632,14 @@ fn glyph_cell(
     });
     if let Some(transform) = transform {
         let cell = crate::font_transform::reduce_glyph_coverage(&cell, ratios);
-        let left = (left as f32 / ratios[0] + size * transform.offset_x as f32 / 65536.0).floor() as i32;
-        let top = (top as f32 / ratios[1] + size * transform.offset_y as f32 / 65536.0).floor() as i32;
+        let left =
+            (left as f32 / ratios[0] + size * transform.offset_x as f32 / 65536.0).floor() as i32;
+        let top =
+            (top as f32 / ratios[1] + size * transform.offset_y as f32 / 65536.0).floor() as i32;
         Some((cell, left, top))
-    } else { Some((cell, left, top)) }
+    } else {
+        Some((cell, left, top))
+    }
 }
 
 /// sub_435290's per-character records, blitted onto `dst` (format
@@ -1361,7 +1658,9 @@ pub(crate) fn rasterize_placed_glyph_records(
     color_of: &dyn Fn(usize) -> Option<[f32; 4]>,
     shadow: Option<TextShadow>,
 ) {
-    rasterize_transformed_glyph_records(dst, dst_format, glyphs, size, color, color_of, shadow, None);
+    rasterize_transformed_glyph_records(
+        dst, dst_format, glyphs, size, color, color_of, shadow, None,
+    );
 }
 
 pub(crate) fn rasterize_transformed_glyph_records(
@@ -1373,6 +1672,88 @@ pub(crate) fn rasterize_transformed_glyph_records(
     color_of: &dyn Fn(usize) -> Option<[f32; 4]>,
     shadow: Option<TextShadow>,
     transform: Option<crate::native_graph_sys91::Graph91FontTransform>,
+) {
+    rasterize_transformed_glyph_records_clipped(
+        dst, dst_format, glyphs, size, color, color_of, shadow, transform, None,
+    );
+}
+
+fn apply_glyph_opacity(image: &mut DecodedImage, opacity: f32) {
+    for pixel in image.rgba.as_chunks_mut::<4>().0 {
+        pixel[3] = (f32::from(pixel[3]) * opacity.clamp(0.0, 1.0)).round() as u8;
+    }
+}
+
+fn blit_text_record(
+    dst: &mut DecodedImage,
+    dst_format: i32,
+    image: &DecodedImage,
+    x: i32,
+    y: i32,
+    clip: Option<crate::graph::RuntimeClipRect>,
+) {
+    if let Some(clip) = clip {
+        let mut image = image.clone();
+        for py in 0..image.height {
+            for px in 0..image.width {
+                if !point_in_clip(
+                    x.saturating_add(px as i32),
+                    y.saturating_add(py as i32),
+                    Some(clip),
+                ) {
+                    image.rgba[((py * image.width + px) * 4 + 3) as usize] = 0;
+                }
+            }
+        }
+        crate::bitmap_blend::blit_mode(dst, dst_format, &image, 2, x, y, 0, 0);
+    } else {
+        crate::bitmap_blend::blit_mode(dst, dst_format, image, 2, x, y, 0, 0);
+    }
+}
+
+#[cfg(test)]
+mod bitmap_glyph_clip_tests {
+    use super::*;
+
+    #[test]
+    fn image_glyph_pixels_obey_the_window_clip() {
+        let mut dst = DecodedImage {
+            width: 3,
+            height: 1,
+            rgba: vec![0; 12],
+        };
+        let src = DecodedImage {
+            width: 2,
+            height: 1,
+            rgba: vec![255, 0, 0, 255, 0, 255, 0, 255],
+        };
+        blit_text_record(
+            &mut dst,
+            2,
+            &src,
+            0,
+            0,
+            Some(crate::graph::RuntimeClipRect {
+                x: 1.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            }),
+        );
+        assert_eq!(dst.rgba, [0, 0, 0, 0, 0, 255, 0, 255, 0, 0, 0, 0]);
+    }
+}
+
+fn rasterize_transformed_glyph_records_clipped(
+    dst: &mut DecodedImage,
+    dst_format: i32,
+    glyphs: &[crate::text_layout::PlacedGlyph],
+    size: f32,
+    color: [f32; 4],
+    color_of: &dyn Fn(usize) -> Option<[f32; 4]>,
+    shadow: Option<TextShadow>,
+    transform: Option<crate::native_graph_sys91::Graph91FontTransform>,
+    clip: Option<crate::graph::RuntimeClipRect>,
 ) {
     if !valid_raster(dst) || !valid_text_raster(size, glyphs.len()) {
         return;
@@ -1388,12 +1769,16 @@ pub(crate) fn rasterize_transformed_glyph_records(
     for glyph in glyphs {
         let color = color_of(glyph.index).unwrap_or(color);
         let rgb = [byte(color[0]), byte(color[1]), byte(color[2])];
-        let Some((cell, left, top)) = glyph_cell(&font, glyph.ch, glyph.x, glyph.y, size, rgb, transform)
+        let Some((mut cell, left, top)) =
+            glyph_cell(&font, glyph.ch, glyph.x, glyph.y, size, rgb, transform)
         else {
             continue;
         };
+        if crate::glyph_images::current(glyph.ch).is_some() {
+            apply_glyph_opacity(&mut cell, color[3]);
+        }
         let Some(shadow) = shadow else {
-            crate::bitmap_blend::blit_mode(dst, dst_format, &cell, 2, left, top, 0, 0);
+            blit_text_record(dst, dst_format, &cell, left, top, clip);
             continue;
         };
         if shadow.dx > 1024 || shadow.dy > 1024 {
@@ -1460,7 +1845,7 @@ pub(crate) fn rasterize_transformed_glyph_records(
             crate::bitmap_blend::blit_mode(&mut record, 2, &glow, 2, 0, 0, 1, parameter);
             crate::bitmap_blend::blit_mode(&mut record, 2, &cell, 2, dx, dy, 0, 0);
         }
-        crate::bitmap_blend::blit_mode(dst, dst_format, &record, 2, left, top, 0, 0);
+        blit_text_record(dst, dst_format, &record, left, top, clip);
     }
 }
 
@@ -1476,12 +1861,20 @@ pub(crate) fn measure_text_advance(text: &str, size: f32, spacing: f32) -> i32 {
     let width = if let Some(font) = snapshot_font() {
         let scaled = font.as_scaled(PxScale::from(size.max(1.0)));
         text.chars()
-            .map(|character| scaled.h_advance(font.glyph_id(character)))
+            .map(|character| {
+                if crate::glyph_images::handled(character) {
+                    crate::glyph_images::current(character).map_or(0.0, |image| image.width as f32)
+                } else {
+                    scaled.h_advance(font.glyph_id(character))
+                }
+            })
             .sum::<f32>()
     } else {
         text.chars()
             .map(|character| {
-                if character.is_ascii() {
+                if crate::glyph_images::handled(character) {
+                    crate::glyph_images::current(character).map_or(0.0, |image| image.width as f32)
+                } else if character.is_ascii() {
                     size * 0.5
                 } else {
                     size
@@ -1564,41 +1957,72 @@ fn draw_transformed_glyph(
     let Some(transform) = transform else {
         return draw_glyph(dst, font, glyph, color, dx, dy, bold, italic, clip);
     };
-    if !valid_text_position(glyph.position.x, glyph.position.y) { return; }
+    if !valid_text_position(glyph.position.x, glyph.position.y) {
+        return;
+    }
     let ratios = transform.scales();
     let size = glyph.scale.y;
     let high = ab_glyph::Glyph {
-        scale: PxScale { x: glyph.scale.x * ratios[0], y: size * ratios[1] },
+        scale: PxScale {
+            x: glyph.scale.x * ratios[0],
+            y: size * ratios[1],
+        },
         position: point(glyph.position.x * ratios[0], glyph.position.y * ratios[1]),
         ..glyph
     };
-    let Some(outline) = font.outline_glyph(high) else { return; };
+    let Some(outline) = font.outline_glyph(high) else {
+        return;
+    };
     let bounds = outline.px_bounds();
-    if !valid_glyph_bounds(bounds) { return; }
-    let Some(mut cell) = new_raster(bounds.width() as u32, bounds.height() as u32) else { return; };
+    if !valid_glyph_bounds(bounds) {
+        return;
+    }
+    let Some(mut cell) = new_raster(bounds.width() as u32, bounds.height() as u32) else {
+        return;
+    };
     outline.draw(|x, y, coverage| {
         let at = ((y * cell.width + x) * 4) as usize;
-        cell.rgba[at..at+4].copy_from_slice(&[255, 255, 255, (coverage * 255.0).round() as u8]);
+        cell.rgba[at..at + 4].copy_from_slice(&[255, 255, 255, (coverage * 255.0).round() as u8]);
     });
     let cell = crate::font_transform::reduce_glyph_coverage(&cell, ratios);
-    let left = (bounds.min.x / ratios[0] + size * transform.offset_x as f32 / 65536.0).floor() as i32;
-    let top = (bounds.min.y / ratios[1] + size * transform.offset_y as f32 / 65536.0).floor() as i32;
+    let left =
+        (bounds.min.x / ratios[0] + size * transform.offset_x as f32 / 65536.0).floor() as i32;
+    let top =
+        (bounds.min.y / ratios[1] + size * transform.offset_y as f32 / 65536.0).floor() as i32;
     for gy in 0..cell.height {
         for gx in 0..cell.width {
             let coverage = cell.rgba[((gy * cell.width + gx) * 4 + 3) as usize] as f32 / 255.0;
-            let italic_dx = if italic { ((cell.height - gy) as f32 * 0.20).round() as i32 } else { 0 };
+            let italic_dx = if italic {
+                ((cell.height - gy) as f32 * 0.20).round() as i32
+            } else {
+                0
+            };
             let y = top.saturating_add(gy as i32).saturating_add(dy);
             for bold_dx in 0..=i32::from(bold) {
-                let x = left.saturating_add(gx as i32).saturating_add(dx).saturating_add(italic_dx).saturating_add(bold_dx);
-                if x < 0 || y < 0 || x >= dst.width as i32 || y >= dst.height as i32 || !point_in_clip(x,y,clip) { continue; }
+                let x = left
+                    .saturating_add(gx as i32)
+                    .saturating_add(dx)
+                    .saturating_add(italic_dx)
+                    .saturating_add(bold_dx);
+                if x < 0
+                    || y < 0
+                    || x >= dst.width as i32
+                    || y >= dst.height as i32
+                    || !point_in_clip(x, y, clip)
+                {
+                    continue;
+                }
                 let src = [
-                    (color[0].clamp(0.0,1.0)*255.0).round() as u8,
-                    (color[1].clamp(0.0,1.0)*255.0).round() as u8,
-                    (color[2].clamp(0.0,1.0)*255.0).round() as u8,
-                    (coverage*color[3]).clamp(0.0,1.0).mul_add(255.0,0.0).round() as u8,
+                    (color[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (color[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (color[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (coverage * color[3])
+                        .clamp(0.0, 1.0)
+                        .mul_add(255.0, 0.0)
+                        .round() as u8,
                 ];
-                let at = ((y as u32*dst.width+x as u32)*4) as usize;
-                blend_pixel_native(&mut dst.rgba[at..at+4],&src,1.0,0);
+                let at = ((y as u32 * dst.width + x as u32) * 4) as usize;
+                blend_pixel_native(&mut dst.rgba[at..at + 4], &src, 1.0, 0);
             }
         }
     }
@@ -1695,7 +2119,11 @@ fn point_in_clip(x: i32, y: i32, clip: Option<crate::graph::RuntimeClipRect>) ->
     })
 }
 
-pub(crate) fn composite_runtime_item(dst: &mut DecodedImage, src: &DecodedImage, item: &RuntimeGraphDrawItem) {
+pub(crate) fn composite_runtime_item(
+    dst: &mut DecodedImage,
+    src: &DecodedImage,
+    item: &RuntimeGraphDrawItem,
+) {
     if !valid_raster(dst) || !valid_raster(src) {
         return;
     }
@@ -1886,7 +2314,10 @@ fn composite_nearest(
     blend_mode: i32,
     clip: Option<crate::graph::RuntimeClipRect>,
 ) {
-    composite_nearest_with_format(dst,src,x,y,width,height,src_x,src_y,src_width,src_height,opacity,blend_mode,clip,false);
+    composite_nearest_with_format(
+        dst, src, x, y, width, height, src_x, src_y, src_width, src_height, opacity, blend_mode,
+        clip, false,
+    );
 }
 
 fn composite_nearest_with_format(
@@ -1903,7 +2334,7 @@ fn composite_nearest_with_format(
     opacity: f32,
     blend_mode: i32,
     clip: Option<crate::graph::RuntimeClipRect>,
-    ignore_source_alpha:bool,
+    ignore_source_alpha: bool,
 ) {
     if !valid_raster(dst) || !valid_raster(src) {
         return;
@@ -1938,24 +2369,33 @@ fn composite_nearest_with_format(
     // The common screen/background copy has no scaling or fractional source
     // coordinates. Walk contiguous rows instead of dividing/clamping UVs and
     // evaluating the full floating-point blend pipeline for every pixel.
-    if alpha_scale == 1.0 && blend_mode == 128
-        && width == src_width && height == src_height
-        && [x, y, src_x, src_y, width, height].iter()
+    if alpha_scale == 1.0
+        && blend_mode == 128
+        && width == src_width
+        && height == src_height
+        && [x, y, src_x, src_y, width, height]
+            .iter()
             .all(|value| value.abs() <= 32768.0 && value.fract() == 0.0)
     {
         let left = src_x as i64 + i64::from(x0) - x as i64;
         let top = src_y as i64 + i64::from(y0) - y as i64;
         let rows = (y1 - y0) as usize;
         let columns = (x1 - x0) as usize;
-        if left >= 0 && top >= 0 && left + columns as i64 <= i64::from(src.width)
+        if left >= 0
+            && top >= 0
+            && left + columns as i64 <= i64::from(src.width)
             && top + rows as i64 <= i64::from(src.height)
         {
             for row in 0..rows {
                 let source_start = ((top as usize + row) * src.width as usize + left as usize) * 4;
-                let destination_start = ((y0 as usize + row) * dst.width as usize + x0 as usize) * 4;
+                let destination_start =
+                    ((y0 as usize + row) * dst.width as usize + x0 as usize) * 4;
                 let source = &src.rgba[source_start..source_start + columns * 4];
                 let destination = &mut dst.rgba[destination_start..destination_start + columns * 4];
-                for (pixel, sample) in destination.as_chunks_mut::<4>().0.iter_mut()
+                for (pixel, sample) in destination
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
                     .zip(source.as_chunks::<4>().0)
                 {
                     if ignore_source_alpha || sample[3] == 255 {
@@ -1977,8 +2417,10 @@ fn composite_nearest_with_format(
             let sx = (src_x + u * src_width).clamp(0.0, src.width.saturating_sub(1) as f32) as u32;
             let src_i = ((sy * src.width + sx) * 4) as usize;
             let dst_i = ((dy as u32 * dst.width + dx as u32) * 4) as usize;
-            let mut sample: [u8;4]=src.rgba[src_i..src_i+4].try_into().unwrap();
-            if ignore_source_alpha {sample[3]=255;}
+            let mut sample: [u8; 4] = src.rgba[src_i..src_i + 4].try_into().unwrap();
+            if ignore_source_alpha {
+                sample[3] = 255;
+            }
             blend_pixel_native(
                 &mut dst.rgba[dst_i..dst_i + 4],
                 &sample,
@@ -2157,30 +2599,81 @@ mod native_compositor_tests {
     #[test]
     fn integer_copy_matches_pixel_reference_with_crop_clip_and_source_alpha() {
         let source = DecodedImage {
-            width: 7, height: 5,
-            rgba: (0..35).flat_map(|index| [index * 7, 100, 30, [0, 1, 64, 128, 254, 255][index as usize % 6]]).collect(),
+            width: 7,
+            height: 5,
+            rgba: (0..35)
+                .flat_map(|index| {
+                    [
+                        index * 7,
+                        100,
+                        30,
+                        [0, 1, 64, 128, 254, 255][index as usize % 6],
+                    ]
+                })
+                .collect(),
         };
         for ignore_alpha in [false, true] {
             for (x, y) in [(-1, -1), (0, 0), (1, 2)] {
-                for clip in [None, Some(RuntimeClipRect { x: 2.0, y: 1.0, width: 3.0, height: 4.0 })] {
-                    let mut actual = DecodedImage { width: 9, height: 7, rgba: [40, 70, 90, 64].repeat(63) };
+                for clip in [
+                    None,
+                    Some(RuntimeClipRect {
+                        x: 2.0,
+                        y: 1.0,
+                        width: 3.0,
+                        height: 4.0,
+                    }),
+                ] {
+                    let mut actual = DecodedImage {
+                        width: 9,
+                        height: 7,
+                        rgba: [40, 70, 90, 64].repeat(63),
+                    };
                     let mut expected = actual.clone();
-                    super::composite_nearest_with_format(&mut actual, &source,
-                        x as f32, y as f32, 5.0, 3.0, 1.0, 1.0, 5.0, 3.0,
-                        1.0, 128, clip, ignore_alpha);
+                    super::composite_nearest_with_format(
+                        &mut actual,
+                        &source,
+                        x as f32,
+                        y as f32,
+                        5.0,
+                        3.0,
+                        1.0,
+                        1.0,
+                        5.0,
+                        3.0,
+                        1.0,
+                        128,
+                        clip,
+                        ignore_alpha,
+                    );
                     for dy in 0..7i32 {
                         for dx in 0..9i32 {
-                            if dx < x || dx >= x + 5 || dy < y || dy >= y + 3
-                                || !super::point_in_clip(dx, dy, clip) { continue; }
+                            if dx < x
+                                || dx >= x + 5
+                                || dy < y
+                                || dy >= y + 3
+                                || !super::point_in_clip(dx, dy, clip)
+                            {
+                                continue;
+                            }
                             let offset = (((dy - y + 1) * 7 + dx - x + 1) * 4) as usize;
-                            let mut pixel: [u8; 4] = source.rgba[offset..offset + 4].try_into().unwrap();
-                            if ignore_alpha { pixel[3] = 255; }
+                            let mut pixel: [u8; 4] =
+                                source.rgba[offset..offset + 4].try_into().unwrap();
+                            if ignore_alpha {
+                                pixel[3] = 255;
+                            }
                             let target = ((dy * 9 + dx) * 4) as usize;
                             ethornell_core::composite_native_rgba(
-                                (&mut expected.rgba[target..target + 4]).try_into().unwrap(), pixel, 1.0, 128);
+                                (&mut expected.rgba[target..target + 4]).try_into().unwrap(),
+                                pixel,
+                                1.0,
+                                128,
+                            );
                         }
                     }
-                    assert_eq!(actual, expected, "offset=({x},{y}) clip={clip:?} ignore_alpha={ignore_alpha}");
+                    assert_eq!(
+                        actual, expected,
+                        "offset=({x},{y}) clip={clip:?} ignore_alpha={ignore_alpha}"
+                    );
                 }
             }
         }
@@ -2509,13 +3002,55 @@ mod direct_bitmap_text_tests {
 
     #[test]
     fn styled_text_uses_width_color_native_wrapping_and_plain_strings() {
-        let font=super::load_default_font().expect("test requires session font");let _session=super::enter_font_session(&font);
-        let (glyphs,advance)=super::layout_styled_bitmap_text(b"AA\nA",[0,0],20,200,false,false,0x123456,false,0,[200,100]);
-        assert_eq!(advance,40);assert_eq!((glyphs[1].x,glyphs[2].y),(20,20));
-        assert!(glyphs.iter().flat_map(|g|g.cell.rgba.as_chunks::<4>().0).any(|p|p[3]>0&&p[..3]==[0x12,0x34,0x56]));
-        let (wrapped,lines)=super::layout_styled_bitmap_text(b"AAA",[0,0],20,200,false,false,0x123456,true,50,[70,100]);
-        assert_eq!(lines,3);assert_eq!(wrapped.iter().map(|g|g.y).collect::<Vec<_>>(),[0,30,60]);
-        let (_,literal)=super::layout_styled_bitmap_text(b"<b>",[0,0],20,200,false,false,0xFFFFFF,false,0,[200,100]);assert_eq!(literal,60);
+        let font = super::load_default_font().expect("test requires session font");
+        let _session = super::enter_font_session(&font);
+        let (glyphs, advance) = super::layout_styled_bitmap_text(
+            b"AA\nA",
+            [0, 0],
+            20,
+            200,
+            false,
+            false,
+            0x123456,
+            false,
+            0,
+            [200, 100],
+        );
+        assert_eq!(advance, 40);
+        assert_eq!((glyphs[1].x, glyphs[2].y), (20, 20));
+        assert!(
+            glyphs
+                .iter()
+                .flat_map(|g| g.cell.rgba.as_chunks::<4>().0)
+                .any(|p| p[3] > 0 && p[..3] == [0x12, 0x34, 0x56])
+        );
+        let (wrapped, lines) = super::layout_styled_bitmap_text(
+            b"AAA",
+            [0, 0],
+            20,
+            200,
+            false,
+            false,
+            0x123456,
+            true,
+            50,
+            [70, 100],
+        );
+        assert_eq!(lines, 3);
+        assert_eq!(wrapped.iter().map(|g| g.y).collect::<Vec<_>>(), [0, 30, 60]);
+        let (_, literal) = super::layout_styled_bitmap_text(
+            b"<b>",
+            [0, 0],
+            20,
+            200,
+            false,
+            false,
+            0xFFFFFF,
+            false,
+            0,
+            [200, 100],
+        );
+        assert_eq!(literal, 60);
     }
 
     #[test]

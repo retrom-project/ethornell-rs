@@ -49,6 +49,7 @@ pub(crate) fn prepare_frame(
     api: &RuntimeTraceApi,
     textures: &mut BTreeMap<String, CachedGraphTexture>,
 ) -> Result<Vec<RenderCommand>> {
+    let _glyph_session = api.glyph_images.enter_session();
     // Validate source budgets before changing caches or submitting any work.
     // Renderer owns backend/device-specific texture-size checks.
     check_frame_budget(
@@ -58,13 +59,52 @@ pub(crate) fn prepare_frame(
     )?;
     let mut items = api.graph_output_draw_items();
     items.extend(api.directshow_movie_draw_item());
+    let mut glyph_text_images = BTreeMap::new();
+    let mut glyph_bytes = 0usize;
+    let mut glyph_text_bytes = 0usize;
+    for (&id, node) in api
+        .text_nodes
+        .iter()
+        .filter(|(_, node)| api.should_draw_text_node(node))
+    {
+        if uses_glyph_images(api, node) {
+            validate_text(&node.text, node.size)?;
+            if node.style_spans.len() > MAX_FRAME_ITEMS || node.ruby_spans.len() > MAX_FRAME_ITEMS {
+                return Err(EthornellError::Other(
+                    "frame text span budget exceeded".into(),
+                ));
+            }
+            glyph_text_bytes = glyph_text_bytes.saturating_add(node.text.len());
+            for ruby in &node.ruby_spans {
+                validate_text(&ruby.reading, node.size)?;
+                glyph_text_bytes = glyph_text_bytes.saturating_add(ruby.reading.len());
+            }
+            check_frame_budget(0, 0, glyph_text_bytes)?;
+            let image = crate::snapshot::glyph_text_image(api, node)?;
+            glyph_bytes = glyph_bytes.saturating_add(image_bytes(&image)?);
+            check_frame_budget(
+                items
+                    .len()
+                    .saturating_add(glyph_text_images.len())
+                    .saturating_add(1),
+                glyph_bytes,
+                0,
+            )?;
+            glyph_text_images.insert(glyph_text_key(id), image);
+        }
+    }
     let used = items
         .iter()
         .map(|i| i.key.as_str())
+        .chain(glyph_text_images.keys().map(String::as_str))
         .collect::<BTreeSet<_>>();
     let mut texture_bytes = 0usize;
     for key in &used {
-        if let Some(image) = api.graph_images.get(*key) {
+        if let Some(image) = api
+            .graph_images
+            .get(*key)
+            .or_else(|| glyph_text_images.get(*key))
+        {
             texture_bytes = texture_bytes.saturating_add(image_bytes(image)?);
         }
     }
@@ -106,10 +146,18 @@ pub(crate) fn prepare_frame(
         }
     }
     for key in used {
-        let Some(image) = api.graph_images.get(key) else {
+        let Some(image) = api
+            .graph_images
+            .get(key)
+            .or_else(|| glyph_text_images.get(key))
+        else {
             continue;
         };
-        let revision = api.graph_image_revision(key);
+        let revision = if glyph_text_images.contains_key(key) {
+            crate::snapshot::stable_framebuffer_hash(image)
+        } else {
+            api.graph_image_revision(key)
+        };
         match textures.get_mut(key) {
             Some(cached) if cached.revision != revision => {
                 cached.handle = renderer.update_rgba(&cached.handle, image)?;
@@ -135,6 +183,7 @@ fn compose_commands(
     items: Vec<crate::graph::RuntimeGraphDrawItem>,
     textures: &BTreeMap<String, CachedGraphTexture>,
 ) -> Result<Vec<RenderCommand>> {
+    let _glyph_session = api.glyph_images.enter_session();
     let mut commands = vec![RenderCommand::Clear {
         color: [0.0, 0.0, 0.0, 1.0],
     }];
@@ -167,13 +216,38 @@ fn compose_commands(
             z: graph_render_z(flattened_z),
         });
     }
-    for node in api
+    for (&id, node) in api
         .text_nodes
-        .values()
-        .filter(|n| api.should_draw_text_node(n))
+        .iter()
+        .filter(|(_, node)| api.should_draw_text_node(node))
     {
         // compose_commands is also exercised without a GPU in regression tests.
         validate_text(&node.text, node.size)?;
+        if uses_glyph_images(api, node) {
+            let cached = textures
+                .get(&glyph_text_key(id))
+                .ok_or_else(|| EthornellError::Other("bitmap glyph text texture missing".into()))?;
+            commands.push(RenderCommand::DrawTexture {
+                texture: cached.handle.id,
+                x: 0.0,
+                y: 0.0,
+                width: cached.handle.width as f32,
+                height: cached.handle.height as f32,
+                src_x: 0.0,
+                src_y: 0.0,
+                src_width: 1.0,
+                src_height: 1.0,
+                opacity: 1.0,
+                ignore_source_alpha: false,
+                blend_mode: 128,
+                rotation_degrees: 0.0,
+                destination_quad: None,
+                linear_sampling: false,
+                clip: None,
+                z: text_render_z(node.z),
+            });
+            continue;
+        }
         let parent = node
             .target_surface
             .filter(|s| api.graph_surfaces.contains_key(s))
@@ -354,6 +428,18 @@ fn compose_commands(
     Ok(commands)
 }
 
+fn glyph_text_key(id: i32) -> String {
+    format!("\0native-glyph-text:{id}")
+}
+
+fn uses_glyph_images(api: &RuntimeTraceApi, node: &crate::text::RuntimeTextNode) -> bool {
+    api.glyph_images.contains_text(&node.text)
+        || node
+            .ruby_spans
+            .iter()
+            .any(|ruby| api.glyph_images.contains_text(&ruby.reading))
+}
+
 /// Renderer depth of a graph object at native priority `z`; depths 0 and 1
 /// are below every graph object.
 fn graph_render_z(z: i32) -> i32 {
@@ -391,6 +477,96 @@ mod tests {
 
     fn api() -> RuntimeTraceApi {
         RuntimeTraceApi::new(ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap())
+    }
+
+    #[test]
+    fn registered_unicode_glyph_uses_owned_colour_texture_at_text_priority() {
+        let font = crate::snapshot::load_default_font().expect("test requires session font");
+        let _font = crate::snapshot::enter_font_session(&font);
+        let mut api = api();
+        api.store_runtime_bitmap(
+            17,
+            DecodedImage {
+                width: 2,
+                height: 1,
+                rgba: vec![255, 0, 0, 255, 0, 255, 0, 255],
+            },
+            2,
+        );
+        api.configure_glyph_image(0x8000_f001_u32 as i32, 17, 1, 0, 1, 1)
+            .unwrap();
+        api.graph_resources.remove(&17);
+        api.graph_images.clear();
+        api.bitmap_dimensions.remove(&17);
+        api.graph_surfaces.remove(&17);
+        let node = crate::text::RuntimeTextNode {
+            text: "\u{f001}".into(),
+            enabled: true,
+            owner_object: None,
+            screen_attached: false,
+            target_surface: None,
+            x: 5.0,
+            y: 6.0,
+            size: 80.0,
+            line_height: 80.0,
+            formatted_layout: false,
+            color: [0.0, 0.0, 1.0, 1.0],
+            z: 100,
+            ruby_spans: vec![],
+            style_spans: vec![],
+        };
+        let image = crate::snapshot::glyph_text_image(&api, &node).unwrap();
+        let at = ((6 * image.width + 5) * 4) as usize;
+        assert_eq!(&image.rgba[at..at + 4], &[0, 255, 0, 255]);
+        assert_eq!(
+            image
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| p[3] != 0)
+                .count(),
+            1
+        );
+        api.text_nodes.insert(3, node.clone());
+        let textures = BTreeMap::from([(
+            glyph_text_key(3),
+            CachedGraphTexture {
+                handle: TextureHandle {
+                    id: 42,
+                    width: image.width,
+                    height: image.height,
+                },
+                revision: crate::snapshot::stable_framebuffer_hash(&image),
+            },
+        )]);
+        let commands = compose_commands(&api, vec![], &textures).unwrap();
+        assert!(matches!(
+            commands[1],
+            RenderCommand::DrawTexture {
+                texture: 42,
+                z: 102,
+                ..
+            }
+        ));
+        assert!(!commands.iter().any(|command|matches!(command,RenderCommand::DrawText {text,..} if text.contains('\u{f001}'))));
+        let mut ruby_node = node;
+        ruby_node.text = "A".into();
+        ruby_node.ruby_spans = vec![crate::text_anim::RuntimeRubySpan {
+            start_char: 0,
+            end_char: 1,
+            reading: "\u{f101}".into(),
+        }];
+        assert!(uses_glyph_images(&api, &ruby_node));
+        api.configure_glyph_image(0x8000_f101_u32 as i32, -1, 0, 0, 0, 0)
+            .unwrap();
+        assert!(uses_glyph_images(&api, &ruby_node));
+        let cleared = crate::snapshot::glyph_text_image(&api, &api.text_nodes[&3]).unwrap();
+        assert!(cleared.rgba.iter().all(|&byte| byte == 0));
+        assert_ne!(
+            crate::snapshot::stable_framebuffer_hash(&image),
+            crate::snapshot::stable_framebuffer_hash(&cleared)
+        );
     }
 
     fn item(z: i32) -> RuntimeGraphDrawItem {
@@ -511,7 +687,10 @@ mod tests {
         let mut api = api();
         let window = api.alloc_window_surface(1280, 300).unwrap();
         api.set_graph_object_draw_enabled(window, true);
-        api.graph_surfaces.get_mut(&window).unwrap().line_spacing_percent = 25;
+        api.graph_surfaces
+            .get_mut(&window)
+            .unwrap()
+            .line_spacing_percent = 25;
         api.surface_text_states.entry(window).or_default().font_size = 28;
         api.start_native_message("ab\ncd".into(), Some(window));
         api.reveal_text_on_input();

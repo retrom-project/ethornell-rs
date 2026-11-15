@@ -1,0 +1,88 @@
+name: Retrom browser
+on:
+  pull_request:
+    branches: [retrom/g7cfc2fba8261]
+  push:
+    branches: [retrom/g7cfc2fba8261]
+    tags: [retrom-core-g7cfc2fba8261-r*]
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+      - uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install exact bindgen
+        run: |
+          curl --fail --location --retry 3 https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.130/wasm-bindgen-0.2.130-x86_64-unknown-linux-musl.tar.gz -o "$RUNNER_TEMP/bindgen.tar.gz"
+          echo "9687f3bb551b9f66f37ed32a40d7913a00f7962db653054e56857bc306c3227f  $RUNNER_TEMP/bindgen.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/bindgen.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/wasm-bindgen-0.2.130-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+      - name: Install pinned host regression browser
+        run: |
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/retrom-browsers"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
+          npm ci --prefix platform/retrom
+          npm exec --prefix platform/retrom -- playwright-core install --with-deps chromium
+      - name: Test release identity and native parsers
+        run: |
+          python3 -m unittest discover -s tools -p 'test_retrom_*.py'
+          rustc --test crates/ethornell-app/src/file_policy/user_alias.rs -o "$RUNNER_TEMP/user-alias-test"
+          "$RUNNER_TEMP/user-alias-test"
+          cargo test --locked -p ethornell-archive -p ethornell-image -p ethornell-script -p ethornell-vm --lib -j4
+      - name: Build and verify immutable browser distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" = tag ]]; then
+            git branch retrom/g7cfc2fba8261 origin/retrom/g7cfc2fba8261
+            raw_tag_ref="refs/retrom-release/$GITHUB_REF_NAME"
+            git fetch --no-tags origin "refs/tags/$GITHUB_REF_NAME:$raw_tag_ref"
+            RETROM_RELEASE_TAG_REF="$raw_tag_ref" python3 tools/build_retrom_release.py "$RUNNER_TEMP/release" "$GITHUB_REF_NAME"
+          else
+            python3 tools/build_retrom_release.py "$RUNNER_TEMP/release" retrom-core-g7cfc2fba8261-r1-rc.1 --check
+          fi
+          python3 tools/build_retrom_release.py "$RUNNER_TEMP/release" --verify
+      - name: Rebuild and compare every asset
+        run: |
+          .github/rpg-runtime/build-candidate.sh "$RUNNER_TEMP/repeat"
+          python3 - "$RUNNER_TEMP/release" "$RUNNER_TEMP/repeat" <<'PY'
+          import pathlib, sys
+          left, right = map(pathlib.Path, sys.argv[1:])
+          for path in left.iterdir():
+              if path.name != 'rpg-runtime-release.json':
+                  assert path.read_bytes() == (right / path.name).read_bytes(), path.name
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retrom-browser
+          path: ${{ runner.temp }}/release/*
+  publish:
+    if: github.ref_type == 'tag'
+    needs: browser
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: retrom-browser
+          path: release-input
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          flags=()
+          if [[ "$GITHUB_REF_NAME" = *-rc.* ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" release-input/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes "${flags[@]}"

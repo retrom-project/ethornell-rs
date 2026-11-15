@@ -2,12 +2,16 @@
 //! Allocation sizes, SE bank bounds and BP pointer tags are independent.
 use super::*;
 
+#[path = "native_glyph_bridge.rs"]
+mod glyph_bridge;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Capabilities {
     regions: Option<(u32, u32)>,
     sound: Option<usize>,
     modern_tags: bool,
     legacy_graph_extensions: bool,
+    unicode_glyph_bridge: bool,
 }
 
 struct Executable<'a> {
@@ -18,9 +22,13 @@ struct Executable<'a> {
 
 impl<'a> Executable<'a> {
     fn code(&self, va: u64) -> Option<&'a [u8]> {
+        self.section_bytes(va, 0x20000000)
+    }
+
+    fn section_bytes(&self, va: u64, characteristics: u32) -> Option<&'a [u8]> {
         let rva = u32::try_from(va.checked_sub(self.base)?).ok()?;
         let section = self.pe.section_headers().iter().find(|s| {
-            s.Characteristics & 0x20000000 != 0
+            s.Characteristics & characteristics == characteristics
                 && rva >= s.VirtualAddress
                 && rva - s.VirtualAddress < s.SizeOfRawData
         })?;
@@ -218,6 +226,33 @@ impl<'a> Executable<'a> {
     }
 }
 
+impl glyph_bridge::Image for Executable<'_> {
+    fn code(&self, address: u64) -> Option<&[u8]> {
+        Executable::code(self, address)
+    }
+
+    fn data(&self, address: u64) -> Option<&[u8]> {
+        self.section_bytes(address, 0)
+    }
+
+    fn writable(&self, address: u64, size: u32) -> bool {
+        let Some(rva) = address
+            .checked_sub(self.base)
+            .and_then(|v| u32::try_from(v).ok())
+        else {
+            return false;
+        };
+        self.pe.section_headers().iter().any(|s| {
+            s.Characteristics & 0xa0000000 == 0x80000000
+                && rva.checked_sub(s.VirtualAddress).is_some_and(|offset| {
+                    offset
+                        .checked_add(size)
+                        .is_some_and(|end| end <= s.VirtualSize.max(s.SizeOfRawData))
+                })
+        })
+    }
+}
+
 fn inspect(bytes: &[u8]) -> Option<Capabilities> {
     let pe = pelite::PeFile::from_bytes(bytes).ok()?;
     if pe.section_headers().as_slice().len() > 96
@@ -282,6 +317,7 @@ fn inspect(bytes: &[u8]) -> Option<Capabilities> {
         sound: bound,
         modern_tags,
         legacy_graph_extensions: exe.legacy_graph_extensions(),
+        unicode_glyph_bridge: width == 4 && glyph_bridge::detect(&exe, &tables),
     })
 }
 
@@ -354,6 +390,7 @@ pub(super) fn apply(manager: &ResourceManager, profile: &mut NativeRuntimeProfil
         profile.se_channels = channels;
     }
     profile.modern_pointer_tags = caps.modern_tags;
+    profile.unicode_glyph_bridge = caps.unicode_glyph_bridge;
     if caps.legacy_graph_extensions && profile.abi == ethornell_vm::NativeAbiProfile::Tayutama {
         profile.abi = ethornell_vm::NativeAbiProfile::Anipani;
     }

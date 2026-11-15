@@ -22,7 +22,8 @@
 const LINE_START_PROHIBITED: &str =
     "\"':;?!ﾞﾟ･，．、。：；？！”゛゜‐]})）〕］｝〉≫》」』】ヽヾゝゞ々ー～っゃゅょッャュョ";
 const LINE_END_PROHIBITED: &str = "[{(（〔［｛〈≪《「『【“";
-pub(crate) const HANGING: &str = "?!ﾞﾟ，．、。？！”゛゜]})）〕］｝〉≫》」』】ヽヾゝゞ々ー～っゃゅょッャュョ";
+pub(crate) const HANGING: &str =
+    "?!ﾞﾟ，．、。？！”゛゜]})）〕］｝〉≫》」』】ヽヾゝゞ々ー～っゃゅょッャュョ";
 const INDENT_OPENERS: &str = "「　（『";
 
 #[derive(Debug, Clone, Copy)]
@@ -40,6 +41,10 @@ pub(crate) struct LayoutParams {
     pub(crate) pitch_percent: i32,
     /// Script kinsoku argument (`a11` of `sub_435290`).
     pub(crate) kinsoku: bool,
+    /// 91:9A property 80000007 times the integer font height.
+    pub(crate) kinsoku_margin: f32,
+    /// Property 0 permits hanging punctuation to use the reserved margin.
+    pub(crate) hanging_ignores_margin: bool,
     /// Global `dword_565CF0`: gates only the first-glyph bracket indent.
     pub(crate) indent_brackets: bool,
 }
@@ -77,7 +82,10 @@ pub(crate) fn layout_text(
     let step = |ch: char| advance_of(ch) + params.spacing;
     let right = params.bitmap_width;
 
-    let indent = if params.kinsoku && params.indent_brackets && chars.first().is_some_and(|c| INDENT_OPENERS.contains(*c)) {
+    let indent = if params.kinsoku
+        && params.indent_brackets
+        && chars.first().is_some_and(|c| INDENT_OPENERS.contains(*c))
+    {
         step(chars[0])
     } else {
         0.0
@@ -124,7 +132,12 @@ pub(crate) fn layout_text(
                 }
             }
         }
-        let bound = right - if params.kinsoku && !hang { params.size } else { 0.0 };
+        let bound = right
+            - if params.kinsoku && !(hang && params.hanging_ignores_margin) {
+                params.kinsoku_margin
+            } else {
+                0.0
+            };
         if !at_line_start && x + needed > bound {
             x = line_start;
             y += pitch;
@@ -155,6 +168,8 @@ mod tests {
             spacing: 0.0,
             pitch_percent: 0,
             kinsoku,
+            kinsoku_margin: 10.0,
+            hanging_ignores_margin: true,
             indent_brackets: false,
         }
     }
@@ -189,7 +204,10 @@ mod tests {
         let layout = layout_text("あいうえおか", &params(50.0, false), &full);
         assert_eq!(layout.lines, 2);
         // exactly full is one line
-        assert_eq!(layout_text("あいうえお", &params(50.0, false), &full).lines, 1);
+        assert_eq!(
+            layout_text("あいうえお", &params(50.0, false), &full).lines,
+            1
+        );
     }
 
     #[test]
@@ -269,5 +287,42 @@ mod tests {
         let layout = layout_text("あい", &p, &full);
         assert_eq!(layout.glyphs[1].x, 12.0);
         assert_eq!(layout.end_x, 24.0);
+    }
+
+    #[test]
+    fn native_text_options_margin_preserves_zero_multiple_and_negative_values() {
+        for (margin, expected) in [
+            (0.0, "あいうえお"),
+            (20.0, "あいう"),
+            (-10.0, "あいうえおか"),
+        ] {
+            let mut p = params(50.0, true);
+            p.kinsoku_margin = margin;
+            assert_eq!(
+                rows(&layout_text("あいうえおかきく", &p, &full))[0],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn native_text_options_hanging_flag_controls_the_reserved_margin() {
+        let mut p = params(50.0, true);
+        assert_eq!(rows(&layout_text("あいうえ。", &p, &full)), ["あいうえ。"]);
+        p.hanging_ignores_margin = false;
+        assert_eq!(
+            rows(&layout_text("あいうえ。", &p, &full)),
+            ["あいう", "え。"]
+        );
+    }
+
+    #[test]
+    fn native_text_options_margin_does_not_enable_kinsoku() {
+        let mut p = params(50.0, false);
+        p.kinsoku_margin = 40.0;
+        assert_eq!(
+            rows(&layout_text("あいうえおか", &p, &full)),
+            ["あいうえお", "か"]
+        );
     }
 }

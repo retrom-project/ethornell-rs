@@ -1,5 +1,5 @@
-use ethornell_app::hosted_files::{self, ResourceFiles, UserStore};
 use ethornell_app::host_runtime::{HostConfig, HostRuntime};
+use ethornell_app::hosted_files::{self, ResourceFiles, UserStore};
 use ethornell_archive::ArchiveSource;
 use ethornell_core::clock::{self, WallTime};
 use std::io::{self, Read, Seek, SeekFrom};
@@ -45,7 +45,8 @@ impl Read for JsFile {
         if count == 0 {
             return Ok(0);
         }
-        let read = js_read_at(self.id, self.position as f64, &mut out[..count]).map_err(js_error)?;
+        let read =
+            js_read_at(self.id, self.position as f64, &mut out[..count]).map_err(js_error)?;
         self.position += u64::from(read);
         Ok(read as usize)
     }
@@ -76,7 +77,10 @@ struct PickedFolder {
 
 impl ResourceFiles for PickedFolder {
     fn list(&self) -> Vec<(String, u64)> {
-        self.files.iter().map(|(path, len, _)| (path.clone(), *len)).collect()
+        self.files
+            .iter()
+            .map(|(path, len, _)| (path.clone(), *len))
+            .collect()
     }
 
     fn open(&self, path: &str) -> io::Result<Box<dyn ArchiveSource>> {
@@ -85,7 +89,11 @@ impl ResourceFiles for PickedFolder {
             .iter()
             .find(|(candidate, _, _)| candidate == path)
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-        Ok(Box::new(JsFile { id: *id, len: *len, position: 0 }))
+        Ok(Box::new(JsFile {
+            id: *id,
+            len: *len,
+            position: 0,
+        }))
     }
 }
 
@@ -112,7 +120,9 @@ fn browser_clock() -> WallTime {
 fn install_panic_hook() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        std::panic::set_hook(Box::new(|info| console_error(&format!("ethornell panic: {info}"))));
+        std::panic::set_hook(Box::new(|info| {
+            console_error(&format!("ethornell panic: {info}"))
+        }));
     });
 }
 
@@ -139,7 +149,11 @@ pub async fn create_renderer(
     let renderer = ethornell_render::Renderer::new_web(canvas, width, height, font.0)
         .await
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    Ok(WebRenderer { renderer, width, height })
+    Ok(WebRenderer {
+        renderer,
+        width,
+        height,
+    })
 }
 
 /// The AudioContext's rate; call before creating the engine.
@@ -196,7 +210,11 @@ impl WebEngine {
             .enumerate()
             .filter_map(|(index, entry)| {
                 let entry = js_sys::Array::from(&entry);
-                Some((entry.get(0).as_string()?, entry.get(1).as_f64()? as u64, index as u32))
+                Some((
+                    entry.get(0).as_string()?,
+                    entry.get(1).as_f64()? as u64,
+                    index as u32,
+                ))
             })
             .collect();
         let user_files = user_files
@@ -207,7 +225,11 @@ impl WebEngine {
                 Some((entry.get(0).as_string()?, bytes))
             })
             .collect();
-        hosted_files::install(Arc::new(PickedFolder { files }), Arc::new(PageStorage), user_files);
+        hosted_files::install(
+            Arc::new(PickedFolder { files }),
+            Arc::new(PageStorage),
+            user_files,
+        );
         let host = HostRuntime::create(HostConfig {
             resource_root: "/game".into(),
             user_root: "/user".into(),
@@ -221,7 +243,18 @@ impl WebEngine {
             silent,
         })
         .map_err(message)?;
-        Ok(Self { host, generation: 0 })
+        Ok(Self {
+            host,
+            generation: 0,
+        })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.host.screen_dimensions().0
+    }
+
+    pub fn height(&self) -> u32 {
+        self.host.screen_dimensions().1
     }
 
     pub fn font(&self) -> WebFont {
@@ -234,19 +267,28 @@ impl WebEngine {
         let generation = self.generation;
         self.host
             .scope(|host| {
-                host.attach_renderer(renderer.renderer, renderer.width, renderer.height, generation)
+                host.attach_renderer(
+                    renderer.renderer,
+                    renderer.width,
+                    renderer.height,
+                    generation,
+                )
             })
             .map_err(message)
     }
 
     /// The canvas backing store is now `width` x `height` pixels.
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
-        self.host.scope(|host| host.resize_surface(width, height)).map_err(message)
+        self.host
+            .scope(|host| host.resize_surface(width, height))
+            .map_err(message)
     }
 
     pub fn detach(&mut self) -> Result<(), JsValue> {
         let generation = self.generation;
-        self.host.scope(|host| host.detach_surface(generation)).map_err(message)
+        self.host
+            .scope(|host| host.detach_surface(generation))
+            .map_err(message)
     }
 
     /// `now_ms`: a monotonic clock (`performance.now()`).
@@ -256,8 +298,17 @@ impl WebEngine {
     }
 
     /// The mobile ABI's input kinds; `x`/`y` in canvas pixels.
-    pub fn input(&mut self, kind: u32, x: f32, y: f32, code: i32, value: f32) -> Result<(), JsValue> {
-        self.host.scope(|host| host.input(kind, x, y, code, value)).map_err(message)
+    pub fn input(
+        &mut self,
+        kind: u32,
+        x: f32,
+        y: f32,
+        code: i32,
+        value: f32,
+    ) -> Result<(), JsValue> {
+        self.host
+            .scope(|host| host.input(kind, x, y, code, value))
+            .map_err(message)
     }
 
     /// Bit 0: page hidden; bit 1: a dialog is open.
@@ -267,7 +318,9 @@ impl WebEngine {
 
     #[wasm_bindgen(js_name = requestClose)]
     pub fn request_close(&mut self) -> Result<(), JsValue> {
-        self.host.scope(|host| host.request_close()).map_err(message)
+        self.host
+            .scope(|host| host.request_close())
+            .map_err(message)
     }
 
     #[wasm_bindgen(js_name = pollEvent)]
@@ -293,11 +346,15 @@ impl WebEngine {
 
     #[wasm_bindgen(js_name = completeRequest)]
     pub fn complete_request(&mut self, id: f64, result: i32) -> Result<(), JsValue> {
-        self.host.scope(|host| host.complete_request(id as u64, result)).map_err(message)
+        self.host
+            .scope(|host| host.complete_request(id as u64, result))
+            .map_err(message)
     }
 
     #[wasm_bindgen(js_name = completeDialog)]
     pub fn complete_dialog(&mut self, id: f64, response: &str) -> Result<(), JsValue> {
-        self.host.scope(|host| host.complete_dialog(id as u64, response)).map_err(message)
+        self.host
+            .scope(|host| host.complete_dialog(id as u64, response))
+            .map_err(message)
     }
 }

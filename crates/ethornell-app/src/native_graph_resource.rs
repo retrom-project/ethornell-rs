@@ -34,33 +34,17 @@ impl RuntimeTraceApi {
                 tracing::debug!(object, value, "GraphSetTextObjectAuxiliaryValue");
                 ethornell_vm::Value::None
             }
-            // sub_487150 -> sub_433210: a glyph image for a character code
-            // in 0xFF01..=0xFFFF (sub_433200). Bitmap -1 clears it; otherwise
-            // the bitmap must exist and the size be nonzero. The image is the
-            // (x, y, width, height) crop of the bitmap.
+            // The VM applies only the confirmed native wrapper's encoding
+            // bridge; the shared registry validates codes and owns the crop.
             0x98 => {
                 let args = pop_args(stack, 6);
                 let values = args.iter().map(value_to_i32).collect::<Vec<_>>();
                 if let [height, width, y, x, source, code] = values.as_slice() {
-                    let fail = |text: String| Some(Err(ethornell_vm::VmError::Runtime(text)));
-                    if (*code as u32).wrapping_sub(0xFF01) > 0xFE {
-                        return fail(format!("無効な文字コード [ {code} ] が指定されました"));
+                    if let Err(error) =
+                        self.configure_glyph_image(*code, *source, *x, *y, *width, *height)
+                    {
+                        return Some(Err(error));
                     }
-                    if *source == -1 {
-                        self.graphic_resource_keys.remove(&(*code, 0));
-                    } else {
-                        let Some(key) = self.resolve_resource_key(*source).map(str::to_string)
-                        else {
-                            return fail(format!("無効なビットマップ [ {source} ] が指定されました"));
-                        };
-                        if *width == 0 || *height == 0 {
-                            return fail(format!(
-                                "無効なイメージサイズ [ {width} , {height} ] が指定されました"
-                            ));
-                        }
-                        self.graphic_resource_keys.insert((*code, 0), key);
-                    }
-                    tracing::debug!(code, source, x, y, width, height, "GraphConfigureGlyphImage");
                 }
                 ethornell_vm::Value::None
             }
@@ -96,7 +80,15 @@ impl RuntimeTraceApi {
                     }
                     0
                 };
-                tracing::debug!(font, height, width_percent, field_565d34, italic, status, "GraphConfigureFontOverride");
+                tracing::debug!(
+                    font,
+                    height,
+                    width_percent,
+                    field_565d34,
+                    italic,
+                    status,
+                    "GraphConfigureFontOverride"
+                );
                 ethornell_vm::Value::Int(status)
             }
             // The VM owns the destination record buffer and exact 128-byte
