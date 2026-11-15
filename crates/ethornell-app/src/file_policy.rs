@@ -1,4 +1,4 @@
-#[cfg(all(fd_policy, any(feature="nfs", feature="smb")))]
+#[cfg(all(fd_policy, any(feature = "nfs", feature = "smb")))]
 mod network;
 // A scoped per-session policy. Desktop calls have no policy. Host calls install
 // it with an RAII guard, including during bootstrap and all native dispatch.
@@ -11,7 +11,10 @@ use std::{
 // Bounded, non-secret diagnostics. Do not embed any user path or upstream IO
 // message: the ABI may safely expose this numeric stage and errno only.
 fn policy_error(code: u32, error: io::Error) -> io::Error {
-    io::Error::new(error.kind(), format!("host_policy:{code}:{}", error.raw_os_error().unwrap_or(0)))
+    io::Error::new(
+        error.kind(),
+        format!("host_policy:{code}:{}", error.raw_os_error().unwrap_or(0)),
+    )
 }
 
 /// What the policy reports about a name (std::fs::Metadata has no portable
@@ -23,14 +26,26 @@ pub(crate) struct PolicyMetadata {
     readonly: bool,
 }
 impl PolicyMetadata {
-    pub fn is_file(&self) -> bool { !self.is_dir }
-    pub fn is_dir(&self) -> bool { self.is_dir }
-    pub fn len(&self) -> u64 { self.len }
-    pub fn readonly(&self) -> bool { self.readonly }
+    pub fn is_file(&self) -> bool {
+        !self.is_dir
+    }
+    pub fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+    pub fn readonly(&self) -> bool {
+        self.readonly
+    }
 }
 impl From<std::fs::Metadata> for PolicyMetadata {
     fn from(m: std::fs::Metadata) -> Self {
-        Self { is_dir: m.is_dir(), len: m.len(), readonly: m.permissions().readonly() }
+        Self {
+            is_dir: m.is_dir(),
+            len: m.len(),
+            readonly: m.permissions().readonly(),
+        }
     }
 }
 /// Held for the session: the host's exclusive claim on the user root.
@@ -41,8 +56,8 @@ pub(crate) type WriterLock = ();
 
 #[derive(Clone, Debug)]
 pub(crate) struct FilePolicy {
-    #[cfg(all(fd_policy, any(feature="nfs",feature="smb")))]
-    network:Option<std::sync::Arc<network::NetworkRoot>>,
+    #[cfg(all(fd_policy, any(feature = "nfs", feature = "smb")))]
+    network: Option<std::sync::Arc<network::NetworkRoot>>,
     pub resource: PathBuf,
     pub user: PathBuf,
     #[cfg(fd_policy)]
@@ -296,19 +311,30 @@ fn case_component(
 
 #[cfg(fd_policy)]
 impl FilePolicy {
-    #[cfg(any(feature="nfs",feature="smb"))]
-    pub(crate) fn from_network_directory(directory:game_network::Directory,user:&Path)->io::Result<Self> {
-        Self::from_network_root(std::sync::Arc::new(network::NetworkRoot::from_directory(directory)?),user)
+    #[cfg(any(feature = "nfs", feature = "smb"))]
+    pub(crate) fn from_network_directory(
+        directory: game_network::Directory,
+        user: &Path,
+    ) -> io::Result<Self> {
+        Self::from_network_root(
+            std::sync::Arc::new(network::NetworkRoot::from_directory(directory)?),
+            user,
+        )
     }
-    #[cfg(any(feature="nfs",feature="smb"))]
-    fn from_network_root(network:std::sync::Arc<network::NetworkRoot>,user:&Path)->io::Result<Self> {
-        let parent=user.parent().ok_or_else(||io::Error::other("network game user root needs a parent"))?;
-        let anchor=parent.join(".ethornell-network-resources");
+    #[cfg(any(feature = "nfs", feature = "smb"))]
+    fn from_network_root(
+        network: std::sync::Arc<network::NetworkRoot>,
+        user: &Path,
+    ) -> io::Result<Self> {
+        let parent = user
+            .parent()
+            .ok_or_else(|| io::Error::other("network game user root needs a parent"))?;
+        let anchor = parent.join(".ethornell-network-resources");
         std::fs::create_dir_all(&anchor)?;
         std::fs::create_dir_all(user)?;
-        let mut policy=Self::new(&anchor,user)?;
-        policy.resource=network.mount.path().to_owned();
-        policy.network=Some(network);
+        let mut policy = Self::new(&anchor, user)?;
+        policy.resource = network.mount.path().to_owned();
+        policy.network = Some(network);
         Ok(policy)
     }
     #[cfg(fd_policy)]
@@ -349,14 +375,31 @@ impl FilePolicy {
     }
     /// A resource-root file of at most `limit` bytes.
     pub fn read_resource(&self, name: &str, limit: u64) -> io::Result<Vec<u8>> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network {
-            let budget=||io::Error::new(io::ErrorKind::InvalidData,"network user resource byte budget");
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            let budget = || {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "network user resource byte budget",
+                )
+            };
             use std::io::Read;
             match self.open_resource(name) {
-                Ok(file)=>{if file.metadata()?.len()>limit{return Err(budget());}let mut bytes=Vec::new();file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;if bytes.len() as u64>limit{return Err(budget());}return Ok(bytes);},
-                Err(e) if e.kind()==io::ErrorKind::NotFound=>return net.read(name.strip_prefix("bgi-resource/").unwrap_or(name),limit),
-                Err(e)=>return Err(e),
+                Ok(file) => {
+                    if file.metadata()?.len() > limit {
+                        return Err(budget());
+                    }
+                    let mut bytes = Vec::new();
+                    file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+                    if bytes.len() as u64 > limit {
+                        return Err(budget());
+                    }
+                    return Ok(bytes);
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    return net.read(name.strip_prefix("bgi-resource/").unwrap_or(name), limit);
+                }
+                Err(e) => return Err(e),
             }
         }
 
@@ -427,8 +470,10 @@ impl FilePolicy {
         Ok(dir)
     }
     pub fn open_manager(&self) -> ethornell_core::Result<ethornell_archive::ResourceManager> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network {return net.manager(&self.resource);}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            return net.manager(&self.resource);
+        }
 
         use std::io::{Read, Seek, SeekFrom};
         let mut files = Vec::new();
@@ -469,37 +514,44 @@ impl FilePolicy {
         )
     }
     pub fn new(resource: &Path, user: &Path) -> io::Result<Self> {
-        #[cfg(any(feature="nfs",feature="smb"))]
+        #[cfg(any(feature = "nfs", feature = "smb"))]
         if resource.to_string_lossy().contains("://") {
-            let network=std::sync::Arc::new(network::NetworkRoot::connect(&resource.to_string_lossy())?);
-            return Self::from_network_root(network,user);
+            let network =
+                std::sync::Arc::new(network::NetworkRoot::connect(&resource.to_string_lossy())?);
+            return Self::from_network_root(network, user);
         }
         fn open_root(path: &Path, stage: u32) -> io::Result<(PathBuf, std::fs::File)> {
             use std::{
                 ffi::CString,
                 os::{
                     fd::{AsRawFd, FromRawFd},
-                    unix::{ffi::OsStrExt, fs::{OpenOptionsExt, MetadataExt}},
+                    unix::{
+                        ffi::OsStrExt,
+                        fs::{MetadataExt, OpenOptionsExt},
+                    },
                 },
             };
             // Resolve a host-authorized alias once (e.g. /sdcard or macOS
             // /var), then bind every canonical component without following
             // links. A replaced ancestor cannot redirect the subsequent open.
-            let absolute = path.canonicalize().map_err(|e|policy_error(stage,e))?;
-            let expected = std::fs::metadata(&absolute).map_err(|e|policy_error(stage+1,e))?;
+            let absolute = path.canonicalize().map_err(|e| policy_error(stage, e))?;
+            let expected = std::fs::metadata(&absolute).map_err(|e| policy_error(stage + 1, e))?;
             // Android's /data and /data/user/0 can be execute-only to an app.
             // O_RDONLY would require unrelated ancestor listing permission.
             // O_PATH retains only traversal capability; nofollow still rejects
             // a substituted symlink at every component. Only the final root is
             // reopened O_RDONLY to prove/read its actual directory contents.
-            #[cfg(any(target_os="android", target_os="linux"))]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             let ancestor_mode = libc::O_PATH;
-            #[cfg(not(any(target_os="android", target_os="linux")))]
+            #[cfg(not(any(target_os = "android", target_os = "linux")))]
             let ancestor_mode = libc::O_RDONLY;
             let mut dir = std::fs::OpenOptions::new()
                 .read(true)
-                .custom_flags(ancestor_mode | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-                .open("/").map_err(|e|policy_error(stage+2,e))?;
+                .custom_flags(
+                    ancestor_mode | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+                .open("/")
+                .map_err(|e| policy_error(stage + 2, e))?;
             let mut normalized = PathBuf::from("/");
             for component in absolute.components() {
                 match component {
@@ -517,7 +569,7 @@ impl FilePolicy {
                             )
                         };
                         if fd < 0 {
-                            return Err(policy_error(stage+3, io::Error::last_os_error()));
+                            return Err(policy_error(stage + 3, io::Error::last_os_error()));
                         }
                         dir = unsafe { std::fs::File::from_raw_fd(fd) };
                         normalized.push(part);
@@ -526,17 +578,28 @@ impl FilePolicy {
                 }
             }
             let dot = CString::new(".").unwrap();
-            let fd = unsafe {libc::openat(dir.as_raw_fd(),dot.as_ptr(),libc::O_RDONLY|libc::O_DIRECTORY|libc::O_NOFOLLOW|libc::O_CLOEXEC)};
-            if fd<0 {return Err(policy_error(stage+4,io::Error::last_os_error()));}
-            let dir = unsafe {std::fs::File::from_raw_fd(fd)};
-            let bound = dir.metadata().map_err(|e|policy_error(stage+5,e))?;
-            if !bound.is_dir() || (bound.dev(),bound.ino()) != (expected.dev(),expected.ino()) {
-                return Err(policy_error(stage+6,io::Error::from(io::ErrorKind::PermissionDenied)));
+            let fd = unsafe {
+                libc::openat(
+                    dir.as_raw_fd(),
+                    dot.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                return Err(policy_error(stage + 4, io::Error::last_os_error()));
+            }
+            let dir = unsafe { std::fs::File::from_raw_fd(fd) };
+            let bound = dir.metadata().map_err(|e| policy_error(stage + 5, e))?;
+            if !bound.is_dir() || (bound.dev(), bound.ino()) != (expected.dev(), expected.ino()) {
+                return Err(policy_error(
+                    stage + 6,
+                    io::Error::from(io::ErrorKind::PermissionDenied),
+                ));
             }
             Ok((normalized, dir))
         }
-        let (resource, resource_dir) = open_root(resource,101)?;
-        let (user, user_dir) = open_root(user,111)?;
+        let (resource, resource_dir) = open_root(resource, 101)?;
+        let (user, user_dir) = open_root(user, 111)?;
         if user.starts_with(&resource) || resource.starts_with(&user) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -544,8 +607,8 @@ impl FilePolicy {
             ));
         }
         Ok(Self {
-            #[cfg(any(feature="nfs",feature="smb"))]
-            network:None,
+            #[cfg(any(feature = "nfs", feature = "smb"))]
+            network: None,
             resource,
             user,
             resource_dir: std::sync::Arc::new(resource_dir),
@@ -555,8 +618,10 @@ impl FilePolicy {
     /// ResourceManager caches archive descriptors. Reject links before opening
     /// its index so a game cannot smuggle an outside archive into that cache.
     pub fn validate_resource_tree(&self) -> io::Result<()> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network {return net.validate();}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            return net.validate();
+        }
 
         walk_directory(
             &self.resource_dir,
@@ -568,12 +633,16 @@ impl FilePolicy {
         )
     }
     pub fn metadata(&self, name: &str) -> Option<PolicyMetadata> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network {
-            let normalized=name.replace('\\',"/");
-            if let Some(name)=normalized.strip_prefix("bgi-resource/") {return net.metadata(name);}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            let normalized = name.replace('\\', "/");
+            if let Some(name) = normalized.strip_prefix("bgi-resource/") {
+                return net.metadata(name);
+            }
             if !normalized.starts_with("bgi-user/") {
-                return self.metadata(&format!("bgi-user/{normalized}")).or_else(||net.metadata(&normalized));
+                return self
+                    .metadata(&format!("bgi-user/{normalized}"))
+                    .or_else(|| net.metadata(&normalized));
             }
         }
 
@@ -603,15 +672,31 @@ impl FilePolicy {
         }
         None
     }
-    pub fn user_metadata(&self,name:&str)->Option<PolicyMetadata> {self.metadata(&user_data_alias(name))}
-    pub fn enumerate_user(&self,pattern:&str,recursive:bool,max_count:usize,directories:bool)->io::Result<Vec<String>> {self.enumerate(&user_data_alias(pattern),recursive,max_count,directories)}
+    pub fn user_metadata(&self, name: &str) -> Option<PolicyMetadata> {
+        self.metadata(&user_data_alias(name))
+    }
+    pub fn enumerate_user(
+        &self,
+        pattern: &str,
+        recursive: bool,
+        max_count: usize,
+        directories: bool,
+    ) -> io::Result<Vec<String>> {
+        self.enumerate(&user_data_alias(pattern), recursive, max_count, directories)
+    }
     pub fn read_loose(&self, name: &str) -> io::Result<Vec<u8>> {
-        #[cfg(any(feature="nfs",feature="smb"))]
+        #[cfg(any(feature = "nfs", feature = "smb"))]
         if self.network.is_some() {
-            let normalized=name.replace('\\',"/");
-            if let Some(name)=normalized.strip_prefix("bgi-resource/") {return self.read_resource(name,256*1024*1024);}
-            if !normalized.starts_with("bgi-user/") && self.open_relative(&self.user_dir,&normalized,false).is_err_and(|e|e.kind()==io::ErrorKind::NotFound) {
-                return self.read_resource(&normalized,256*1024*1024);
+            let normalized = name.replace('\\', "/");
+            if let Some(name) = normalized.strip_prefix("bgi-resource/") {
+                return self.read_resource(name, 256 * 1024 * 1024);
+            }
+            if !normalized.starts_with("bgi-user/")
+                && self
+                    .open_relative(&self.user_dir, &normalized, false)
+                    .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
+            {
+                return self.read_resource(&normalized, 256 * 1024 * 1024);
             }
         }
 
@@ -656,9 +741,11 @@ impl FilePolicy {
         max_count: usize,
         directories: bool,
     ) -> io::Result<Vec<String>> {
-        #[cfg(any(feature="nfs",feature="smb"))]
-        if let Some(net)=&self.network {
-            if let Some(name)=pattern.replace('\\',"/").strip_prefix("bgi-resource/") {return net.enumerate(name,recursive,max_count,directories);}
+        #[cfg(any(feature = "nfs", feature = "smb"))]
+        if let Some(net) = &self.network {
+            if let Some(name) = pattern.replace('\\', "/").strip_prefix("bgi-resource/") {
+                return net.enumerate(name, recursive, max_count, directories);
+            }
         }
         let normalized = pattern.replace('\\', "/");
         let (base, name) = if let Some(name) = normalized.strip_prefix("bgi-resource/") {
@@ -765,12 +852,14 @@ impl FilePolicy {
     pub fn probe_writable(&self, name: &str) -> io::Result<()> {
         use std::os::fd::{AsRawFd, FromRawFd};
         let normalized = user_data_alias(name);
-        if name.replace('\\',"/").starts_with("bgi-resource/") && normalized.starts_with("bgi-user/") {
+        if name.replace('\\', "/").starts_with("bgi-resource/")
+            && normalized.starts_with("bgi-user/")
+        {
             // The original resource UserData may exist while the separate user
             // tree is empty. Materialize only this authorized user directory,
             // not the original contents, before the script's writable probe.
-            let marker=format!("{}/.probe-parent",normalized.trim_end_matches('/'));
-            let _=self.parent(&marker,true)?;
+            let marker = format!("{}/.probe-parent", normalized.trim_end_matches('/'));
+            let _ = self.parent(&marker, true)?;
         }
         if normalized.starts_with("bgi-resource/") {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
@@ -953,8 +1042,12 @@ impl FilePolicy {
     pub fn metadata(&self, _: &str) -> Option<PolicyMetadata> {
         None
     }
-    pub fn user_metadata(&self,_:&str)->Option<PolicyMetadata> {None}
-    pub fn enumerate_user(&self,_:&str,_:bool,_:usize,_:bool)->io::Result<Vec<String>> {Self::unavailable()}
+    pub fn user_metadata(&self, _: &str) -> Option<PolicyMetadata> {
+        None
+    }
+    pub fn enumerate_user(&self, _: &str, _: bool, _: usize, _: bool) -> io::Result<Vec<String>> {
+        Self::unavailable()
+    }
     pub fn read_loose(&self, _: &str) -> io::Result<Vec<u8>> {
         Self::unavailable()
     }
@@ -1009,18 +1102,41 @@ mod tests {
         write_arc("Archive/data01000.arc", packed);
         write_arc("Other/data01000.arc", b"other member");
         let manager = policy.open_manager().unwrap();
-        let mut api = super::super::RuntimeTraceApi::new_with_native_root(manager, policy.resource.clone());
+        let mut api =
+            super::super::RuntimeTraceApi::new_with_native_root(manager, policy.resource.clone());
         scope(&policy, || {
-            for archive in ["system.arc", "bgi-resource/system.arc", "Archive\\data01000.arc", "bgi-resource\\archive/DATA01000.arc"] {
+            for archive in [
+                "system.arc",
+                "bgi-resource/system.arc",
+                "Archive\\data01000.arc",
+                "bgi-resource\\archive/DATA01000.arc",
+            ] {
                 assert!(api.archive_entry_exists(archive, "entry"), "{archive}");
-                assert_eq!(api.read_archive_entry_raw(archive, "entry").unwrap(), packed, "{archive}");
+                assert_eq!(
+                    api.read_archive_entry_raw(archive, "entry").unwrap(),
+                    packed,
+                    "{archive}"
+                );
             }
-            assert_eq!(api.read_archive_entry_raw("Other/data01000.arc", "entry").unwrap(), b"other member");
-            for denied in ["../Archive/data01000.arc", "bgi-resource/Archive/../Archive/data01000.arc",
-                "bgi-user/Archive/data01000.arc", "/Archive/data01000.arc", "C:/Archive/data01000.arc",
-                "Missing/data01000.arc", ""] {
+            assert_eq!(
+                api.read_archive_entry_raw("Other/data01000.arc", "entry")
+                    .unwrap(),
+                b"other member"
+            );
+            for denied in [
+                "../Archive/data01000.arc",
+                "bgi-resource/Archive/../Archive/data01000.arc",
+                "bgi-user/Archive/data01000.arc",
+                "/Archive/data01000.arc",
+                "C:/Archive/data01000.arc",
+                "Missing/data01000.arc",
+                "",
+            ] {
                 assert!(!api.archive_entry_exists(denied, "entry"), "{denied}");
-                assert!(api.read_archive_entry_raw(denied, "entry").is_none(), "{denied}");
+                assert!(
+                    api.read_archive_entry_raw(denied, "entry").is_none(),
+                    "{denied}"
+                );
             }
         });
         std::fs::remove_dir_all(base).unwrap();
@@ -1093,52 +1209,109 @@ mod tests {
     }
     #[test]
     fn install_userdata_alias_is_real_user_io_not_resource_write_or_original_save_import() {
-        let (base,p)=roots("userdata-alias");
+        let (base, p) = roots("userdata-alias");
         std::fs::create_dir(p.resource.join("UserData")).unwrap();
-        std::fs::write(p.resource.join("UserData/original.sud"),b"original").unwrap();
+        std::fs::write(p.resource.join("UserData/original.sud"), b"original").unwrap();
         assert!(p.read_user("bgi-resource\\UserData/original.sud").is_err());
-        assert!(p.user_metadata("bgi-resource\\UserData/original.sud").is_none());
-        assert_eq!(p.read_loose("bgi-resource\\UserData/original.sud").unwrap(),b"original");
+        assert!(
+            p.user_metadata("bgi-resource\\UserData/original.sud")
+                .is_none()
+        );
+        assert_eq!(
+            p.read_loose("bgi-resource\\UserData/original.sud").unwrap(),
+            b"original"
+        );
         p.probe_writable("bgi-resource\\userdata").unwrap();
         assert!(p.user_metadata("bgi-resource\\USERDATA").unwrap().is_dir());
         assert!(!p.user.join("UserData/original.sud").exists());
-        p.atomic_write("bgi-resource\\UserData/new.sud",b"new").unwrap();
-        assert_eq!(p.read_user("bgi-user\\userdata/NEW.sud").unwrap(),b"new");
-        assert_eq!(p.read_user("bgi-resource\\USERDATA/new.sud").unwrap(),b"new");
+        p.atomic_write("bgi-resource\\UserData/new.sud", b"new")
+            .unwrap();
+        assert_eq!(p.read_user("bgi-user\\userdata/NEW.sud").unwrap(), b"new");
+        assert_eq!(
+            p.read_user("bgi-resource\\USERDATA/new.sud").unwrap(),
+            b"new"
+        );
         assert!(p.read_loose("bgi-resource\\userdata/new.sud").is_err());
-        assert_eq!(p.user_metadata("bgi-resource\\userdata/new.sud").unwrap().len(),3);
-        p.atomic_write("bgi-resource\\UserData/original.sud",b"private replacement").unwrap();
-        assert_eq!(p.read_loose("bgi-resource\\UserData/original.sud").unwrap(),b"original");
-        assert_eq!(p.read_user("bgi-resource\\UserData/original.sud").unwrap(),b"private replacement");
+        assert_eq!(
+            p.user_metadata("bgi-resource\\userdata/new.sud")
+                .unwrap()
+                .len(),
+            3
+        );
+        p.atomic_write(
+            "bgi-resource\\UserData/original.sud",
+            b"private replacement",
+        )
+        .unwrap();
+        assert_eq!(
+            p.read_loose("bgi-resource\\UserData/original.sud").unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            p.read_user("bgi-resource\\UserData/original.sud").unwrap(),
+            b"private replacement"
+        );
         p.create_directory("bgi-resource\\userdata/Nested").unwrap();
         assert!(p.metadata("bgi-user\\UserData/nested").unwrap().is_dir());
-        assert_eq!(p.enumerate("bgi-resource\\UserData/*",false,0,false).unwrap(),vec!["original.sud"]);
-        assert_eq!(p.enumerate_user("bgi-resource\\UserData/*",false,0,false).unwrap(),vec!["new.sud","original.sud"]);
-        for denied in ["bgi-resource/story.arc","bgi-resource/UserData/../../story.arc","bgi-resource/UserData/.ethornell-session.lock","bgi-resource/UserDataX/slot"] {assert!(p.atomic_write(denied,b"bad").is_err());}
+        assert_eq!(
+            p.enumerate("bgi-resource\\UserData/*", false, 0, false)
+                .unwrap(),
+            vec!["original.sud"]
+        );
+        assert_eq!(
+            p.enumerate_user("bgi-resource\\UserData/*", false, 0, false)
+                .unwrap(),
+            vec!["new.sud", "original.sud"]
+        );
+        for denied in [
+            "bgi-resource/story.arc",
+            "bgi-resource/UserData/../../story.arc",
+            "bgi-resource/UserData/.ethornell-session.lock",
+            "bgi-resource/UserDataX/slot",
+        ] {
+            assert!(p.atomic_write(denied, b"bad").is_err());
+        }
         assert!(!p.resource.join("UserData/new.sud").exists());
-        assert_eq!(std::fs::read(p.resource.join("UserData/original.sud")).unwrap(),b"original");
+        assert_eq!(
+            std::fs::read(p.resource.join("UserData/original.sud")).unwrap(),
+            b"original"
+        );
         std::fs::remove_dir_all(base).unwrap();
     }
     #[test]
     fn native_userdata_directory_queries_follow_private_saves_across_reopen() {
-        use ethornell_vm::{SysApi, NativeCallFrame, NativeOpcode, Value};
+        use ethornell_vm::{NativeCallFrame, NativeOpcode, SysApi, Value};
         let (base, policy) = roots("userdata-reopen");
         let make_api = |policy: &FilePolicy| {
             let mut api = super::super::RuntimeTraceApi::new_with_native_root(
-                policy.open_manager().unwrap(), policy.resource.clone());
+                policy.open_manager().unwrap(),
+                policy.resource.clone(),
+            );
             api.host.enabled = true;
             api
         };
         let query = |api: &mut super::super::RuntimeTraceApi, path: &str| {
-            api.call_sys(&mut NativeCallFrame::new(NativeOpcode { group: 0x80, id: 0x2a },
-                vec![Value::Str(path.into())])).unwrap()
+            api.call_sys(&mut NativeCallFrame::new(
+                NativeOpcode {
+                    group: 0x80,
+                    id: 0x2a,
+                },
+                vec![Value::Str(path.into())],
+            ))
+            .unwrap()
         };
         let mut api = make_api(&policy);
         scope(&policy, || {
             assert_eq!(query(&mut api, "bgi-resource\\UserData"), Value::Int(0));
-            let result = api.call_sys(&mut NativeCallFrame::new(
-                NativeOpcode { group: 0x80, id: 0x28 },
-                vec![Value::Str("bgi-resource\\UserData".into())])).unwrap();
+            let result = api
+                .call_sys(&mut NativeCallFrame::new(
+                    NativeOpcode {
+                        group: 0x80,
+                        id: 0x28,
+                    },
+                    vec![Value::Str("bgi-resource\\UserData".into())],
+                ))
+                .unwrap();
             assert_eq!(result, Value::Int(1));
             assert_eq!(query(&mut api, "bgi-resource\\UserData"), Value::Int(1));
             assert!(api.write_file_bytes("bgi-resource\\UserData/slot.sud", b"session save"));
@@ -1151,35 +1324,70 @@ mod tests {
                 assert_eq!(query(&mut api, path), Value::Int(1), "{path}");
                 assert!(api.directory_exists(path));
                 assert!(api.probe_directory_writable(path));
-                let attrs = api.call_sys(&mut NativeCallFrame::new(
-                    NativeOpcode { group: 0x80, id: 0x2c },
-                    vec![Value::Str(path.into())])).unwrap();
+                let attrs = api
+                    .call_sys(&mut NativeCallFrame::new(
+                        NativeOpcode {
+                            group: 0x80,
+                            id: 0x2c,
+                        },
+                        vec![Value::Str(path.into())],
+                    ))
+                    .unwrap();
                 assert_eq!(attrs, Value::Int(0x10));
             }
-            let attrs = api.call_sys(&mut NativeCallFrame::new(
-                NativeOpcode { group: 0x80, id: 0x2c },
-                vec![Value::Str("bgi-resource\\UserData/slot.sud".into())])).unwrap();
+            let attrs = api
+                .call_sys(&mut NativeCallFrame::new(
+                    NativeOpcode {
+                        group: 0x80,
+                        id: 0x2c,
+                    },
+                    vec![Value::Str("bgi-resource\\UserData/slot.sud".into())],
+                ))
+                .unwrap();
             assert_eq!(attrs, Value::Int(0x20));
-            assert_eq!(api.read_user_file_bytes("bgi-resource\\UserData/slot.sud").unwrap(), b"session save");
+            assert_eq!(
+                api.read_user_file_bytes("bgi-resource\\UserData/slot.sud")
+                    .unwrap(),
+                b"session save"
+            );
             assert!(api.file_exists("", "bgi-resource\\UserData/slot.sud"));
             assert!(api.disk_file_exists("bgi-resource\\UserData/slot.sud"));
             assert_eq!(api.file_size("", "bgi-resource\\UserData/slot.sud"), 12);
-            assert_eq!(api.read_disk_file("bgi-resource\\UserData/slot.sud").unwrap(), b"session save");
-            assert_eq!(api.load_file_bytes("bgi-resource\\", "UserData/slot.sud").unwrap(), b"session save");
+            assert_eq!(
+                api.read_disk_file("bgi-resource\\UserData/slot.sud")
+                    .unwrap(),
+                b"session save"
+            );
+            assert_eq!(
+                api.load_file_bytes("bgi-resource\\", "UserData/slot.sud")
+                    .unwrap(),
+                b"session save"
+            );
             for (id, expected) in [(0x34, 1), (0x35, 12)] {
                 let code = [0x80, id, 0x17];
-                let program = ethornell_script::parse_bp_program(Some("saved-file-query".into()), &code);
+                let program =
+                    ethornell_script::parse_bp_program(Some("saved-file-query".into()), &code);
                 let mut vm = ethornell_vm::Vm::new();
                 vm.start(&program);
-                vm.stack = vec![Value::Int(0), Value::Str("bgi-resource\\UserData/slot.sud".into())];
+                vm.stack = vec![
+                    Value::Int(0),
+                    Value::Str("bgi-resource\\UserData/slot.sud".into()),
+                ];
                 let report = vm.run_loaded(&mut api, &ethornell_vm::VmRunOptions::default());
-                assert_eq!(report.stop_reason, ethornell_vm::VmStopReason::Completed, "{report:?}");
+                assert_eq!(
+                    report.stop_reason,
+                    ethornell_vm::VmStopReason::Completed,
+                    "{report:?}"
+                );
                 assert_eq!(vm.stack, vec![Value::Int(expected)]);
             }
             assert!(!api.write_file_bytes("bgi-resource/story.arc", b"denied"));
         });
         assert!(!policy.resource.join("UserData").exists());
-        assert_eq!(std::fs::read(policy.user.join("UserData/slot.sud")).unwrap(), b"session save");
+        assert_eq!(
+            std::fs::read(policy.user.join("UserData/slot.sud")).unwrap(),
+            b"session save"
+        );
         drop(api);
         std::fs::remove_dir_all(base).unwrap();
     }
@@ -1267,20 +1475,42 @@ mod tests {
         std::fs::write(p.user.join("Archive/data06999.arc"), b"user decoy").unwrap();
         std::fs::write(p.user.join("slot.sav"), b"save").unwrap();
         let manager = p.open_manager().unwrap();
-        let mut api = super::super::RuntimeTraceApi::new_with_native_root(manager, p.resource.clone());
+        let mut api =
+            super::super::RuntimeTraceApi::new_with_native_root(manager, p.resource.clone());
         scope(&p, || {
-            assert_eq!(api.enumerate_user_files("Archive\\data06???.arc", false, 0), ["data06000.arc"]);
-            assert_eq!(api.enumerate_native_paths("Archive\\data06???.arc", false, 0, false), ["data06000.arc"]);
-            assert_eq!(api.enumerate_user_files("bgi-user/Archive/*.arc", false, 0), ["data06999.arc"]);
+            assert_eq!(
+                api.enumerate_user_files("Archive\\data06???.arc", false, 0),
+                ["data06000.arc"]
+            );
+            assert_eq!(
+                api.enumerate_native_paths("Archive\\data06???.arc", false, 0, false),
+                ["data06000.arc"]
+            );
+            assert_eq!(
+                api.enumerate_user_files("bgi-user/Archive/*.arc", false, 0),
+                ["data06999.arc"]
+            );
             assert_eq!(api.enumerate_user_files("*.sav", false, 0), ["slot.sav"]);
-            for archive in ["data06000.arc", "Archive\\DATA06000.arc", "bgi-resource/Archive/data06000.arc"] {
+            for archive in [
+                "data06000.arc",
+                "Archive\\DATA06000.arc",
+                "bgi-resource/Archive/data06000.arc",
+            ] {
                 assert_eq!(api.archive_entry_names(archive).unwrap(), names);
             }
-            for denied in ["absent.arc", "../data06000.arc", "/outside/data06000.arc", "bgi-user/Archive/data06000.arc"] {
+            for denied in [
+                "absent.arc",
+                "../data06000.arc",
+                "/outside/data06000.arc",
+                "bgi-user/Archive/data06000.arc",
+            ] {
                 assert!(api.archive_entry_names(denied).is_none(), "{denied}");
             }
             for denied in ["../*.arc", "/outside/*.arc", "C:\\outside\\*.arc"] {
-                assert!(api.enumerate_user_files(denied, false, 0).is_empty(), "{denied}");
+                assert!(
+                    api.enumerate_user_files(denied, false, 0).is_empty(),
+                    "{denied}"
+                );
             }
         });
         std::fs::remove_dir_all(base).unwrap();
@@ -1394,30 +1624,41 @@ mod tests {
     }
     #[test]
     fn host_authorized_root_alias_binds_the_same_canonical_directory_inode() {
-        use std::os::unix::fs::{symlink,MetadataExt};
-        let (base,p)=roots("canonical-alias");
-        symlink(&p.resource,base.join("resource-alias")).unwrap();
-        symlink(&p.user,base.join("user-alias")).unwrap();
-        let alias=FilePolicy::new(&base.join("resource-alias"),&base.join("user-alias")).unwrap();
-        assert_eq!(alias.resource_dir.metadata().unwrap().ino(),p.resource_dir.metadata().unwrap().ino());
-        assert_eq!(alias.user_dir.metadata().unwrap().ino(),p.user_dir.metadata().unwrap().ino());
-        assert_eq!(alias.resource,p.resource);assert_eq!(alias.user,p.user);
+        use std::os::unix::fs::{MetadataExt, symlink};
+        let (base, p) = roots("canonical-alias");
+        symlink(&p.resource, base.join("resource-alias")).unwrap();
+        symlink(&p.user, base.join("user-alias")).unwrap();
+        let alias =
+            FilePolicy::new(&base.join("resource-alias"), &base.join("user-alias")).unwrap();
+        assert_eq!(
+            alias.resource_dir.metadata().unwrap().ino(),
+            p.resource_dir.metadata().unwrap().ino()
+        );
+        assert_eq!(
+            alias.user_dir.metadata().unwrap().ino(),
+            p.user_dir.metadata().unwrap().ino()
+        );
+        assert_eq!(alias.resource, p.resource);
+        assert_eq!(alias.user, p.user);
         std::fs::remove_dir_all(base).unwrap();
     }
     #[test]
-    #[cfg(any(target_os="linux",target_os="android"))]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn execute_only_ancestor_does_not_require_directory_listing_permission() {
         use std::os::unix::fs::PermissionsExt;
-        let (base,p)=roots("execute-only");
-        let nested=base.join("traverse");
+        let (base, p) = roots("execute-only");
+        let nested = base.join("traverse");
         std::fs::create_dir_all(nested.join("resource")).unwrap();
         std::fs::create_dir_all(nested.join("user")).unwrap();
-        std::fs::set_permissions(&nested,std::fs::Permissions::from_mode(0o111)).unwrap();
-        let bound=FilePolicy::new(&nested.join("resource"),&nested.join("user"));
-        std::fs::set_permissions(&nested,std::fs::Permissions::from_mode(0o700)).unwrap();
-        let bound=bound.unwrap();bound.atomic_write("slot",b"safe").unwrap();
-        assert_eq!(bound.read_user("slot").unwrap(),b"safe");
-        drop(p);drop(bound);std::fs::remove_dir_all(base).unwrap();
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o111)).unwrap();
+        let bound = FilePolicy::new(&nested.join("resource"), &nested.join("user"));
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let bound = bound.unwrap();
+        bound.atomic_write("slot", b"safe").unwrap();
+        assert_eq!(bound.read_user("slot").unwrap(), b"safe");
+        drop(p);
+        drop(bound);
+        std::fs::remove_dir_all(base).unwrap();
     }
     #[test]
     fn archive_family_and_explicit_root_names_use_only_authorized_descriptors() {

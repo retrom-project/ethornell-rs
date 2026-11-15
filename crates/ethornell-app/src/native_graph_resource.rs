@@ -40,7 +40,9 @@ impl RuntimeTraceApi {
                 let args = pop_args(stack, 6);
                 let values = args.iter().map(value_to_i32).collect::<Vec<_>>();
                 if let [height, width, y, x, source, code] = values.as_slice() {
-                    if let Err(error) = self.configure_glyph_image(*code, *source, *x, *y, *width, *height) {
+                    if let Err(error) =
+                        self.configure_glyph_image(*code, *source, *x, *y, *width, *height)
+                    {
                         return Some(Err(error));
                     }
                 }
@@ -78,7 +80,15 @@ impl RuntimeTraceApi {
                     }
                     0
                 };
-                tracing::debug!(font, height, width_percent, field_565d34, italic, status, "GraphConfigureFontOverride");
+                tracing::debug!(
+                    font,
+                    height,
+                    width_percent,
+                    field_565d34,
+                    italic,
+                    status,
+                    "GraphConfigureFontOverride"
+                );
                 ethornell_vm::Value::Int(status)
             }
             // The VM owns the destination record buffer and exact 128-byte

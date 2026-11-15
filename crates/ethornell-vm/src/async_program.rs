@@ -27,7 +27,8 @@ impl Vm {
     pub(crate) fn set_newest_async_thread_regions(&mut self, code: u32, data: u32, slots: u32) {
         if let Some(task) = self.async_tasks.last_mut() {
             task.vm.thread.set_region_sizes(code, data, slots);
-            task.vm.sync_region_reservations(task.vm.active_code_used_end());
+            task.vm
+                .sync_region_reservations(task.vm.active_code_used_end());
         }
     }
 
@@ -575,9 +576,16 @@ impl Vm {
     pub(crate) fn value_program(&self, value: Value) -> Option<BpProgram> {
         match value {
             Value::Program(program) => Some((*program).clone()),
-            Value::Ptr(ptr) => self
+            Value::Ptr(ptr) => self.mem_values.get(&self.value_key(ptr)).and_then(|value| {
+                if let Value::Program(program) = value {
+                    Some((**program).clone())
+                } else {
+                    None
+                }
+            }),
+            Value::Int(ptr) => self
                 .mem_values
-                .get(&self.value_key(ptr))
+                .get(&self.value_key(ptr as u32))
                 .and_then(|value| {
                     if let Value::Program(program) = value {
                         Some((**program).clone())
@@ -585,17 +593,6 @@ impl Vm {
                         None
                     }
                 }),
-            Value::Int(ptr) => {
-                self.mem_values
-                    .get(&self.value_key(ptr as u32))
-                    .and_then(|value| {
-                        if let Value::Program(program) = value {
-                            Some((**program).clone())
-                        } else {
-                            None
-                        }
-                    })
-            }
             Value::Str(_) | Value::Func { .. } | Value::None => None,
         }
     }
@@ -708,7 +705,8 @@ pub(crate) fn exchange_saved_local(vm: &mut Vm, window: &mut LocalWindow) {
     let incoming_bounds = window.prefix_lengths();
     window.exchange_bounded(
         &mut vm.memory[LOCAL_MEMORY_BASE as usize..HEAP_MEMORY_BASE],
-        &mut vm.local_window_scratch, bounds,
+        &mut vm.local_window_scratch,
+        bounds,
     );
     vm.memory.set_local_bounds(incoming_bounds);
 }
@@ -922,8 +920,14 @@ mod tests {
             Value::Str("root".into())
         );
         // Locals stay with each thread; heap values travel with the memory.
-        assert_eq!(root.mem_values[&LOCAL_MEMORY_BASE], Value::Str("root".into()));
-        assert_eq!(task.mem_values[&LOCAL_MEMORY_BASE], Value::Str("task".into()));
+        assert_eq!(
+            root.mem_values[&LOCAL_MEMORY_BASE],
+            Value::Str("root".into())
+        );
+        assert_eq!(
+            task.mem_values[&LOCAL_MEMORY_BASE],
+            Value::Str("task".into())
+        );
         let heap = HEAP_MEMORY_BASE as u32;
         assert_eq!(task.mem_values[&heap], Value::Str("root".into()));
         assert!(!root.mem_values.contains_key(&heap));
@@ -933,7 +937,10 @@ mod tests {
             Value::Str("root".into())
         );
         assert_eq!(root.mem_values[&heap], Value::Str("root".into()));
-        assert_eq!(root.mem_values[&LOCAL_MEMORY_BASE], Value::Str("root".into()));
+        assert_eq!(
+            root.mem_values[&LOCAL_MEMORY_BASE],
+            Value::Str("root".into())
+        );
     }
 
     #[test]
@@ -951,7 +958,10 @@ mod tests {
 
         transfer_async_shared_state(&mut root, &mut task);
         assert_eq!(task.read_c_string(ptr).unwrap(), "root");
-        assert_eq!(task.read_value(ptr + 16, 2).unwrap(), Value::Str("value".into()));
+        assert_eq!(
+            task.read_value(ptr + 16, 2).unwrap(),
+            Value::Str("value".into())
+        );
         assert_eq!((local_byte(&task, local), local_byte(&root, local)), (2, 1));
         // The idle root keeps only its local region, not a heap copy.
         assert!(root.memory.is_empty());

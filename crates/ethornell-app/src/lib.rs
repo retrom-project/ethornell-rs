@@ -21,22 +21,21 @@ mod debug_trace;
 mod display_tree;
 mod effects;
 mod file_policy;
-mod native_profile;
 mod frame_presenter;
+mod native_profile;
 /// File roots for hosts without directory descriptors (web, consoles).
 #[cfg(hosted_files)]
 pub use file_policy::hosted as hosted_files;
 mod dc_cache;
 mod dialog_protocol;
+mod font_transform;
+mod game_font;
+mod glyph_images;
 mod graph;
 mod graph_bitmap_nodes;
 mod graph_color;
 mod graph_config;
-mod font_transform;
-mod game_font;
 mod graph_defaults;
-mod graph_presentation;
-mod glyph_images;
 mod graph_effect;
 #[cfg(not(any(target_arch = "wasm32", target_os = "vita", target_os = "horizon")))]
 mod graph_flash;
@@ -48,12 +47,14 @@ mod graph_input;
 mod graph_knob;
 mod graph_links;
 mod graph_movie;
+mod graph_presentation;
 mod graph_sprite_targets;
 mod headless;
 mod host_dialog;
 mod host_installer;
 pub mod host_runtime;
 mod input_state;
+mod installed_folders;
 mod native_background;
 mod native_background_effect;
 mod native_backml;
@@ -74,8 +75,8 @@ mod native_projected_source;
 mod native_selection;
 mod native_sound;
 mod native_sprite_filters;
-mod native_sprite_mask;
 mod native_sprite_link;
+mod native_sprite_mask;
 mod native_sprite_perspective;
 mod native_system;
 mod native_user;
@@ -89,7 +90,6 @@ mod scene;
 mod snapshot;
 #[cfg(desktop_host)]
 mod text_encoding;
-mod installed_folders;
 #[cfg(desktop_host)]
 pub use text_encoding::TextEncoding;
 mod surface_controls;
@@ -285,8 +285,14 @@ fn resource_native_profile(manager: &ResourceManager, bootstrap: &[u8]) -> Nativ
         }
         // Animal Panic 48A5E0 -> 498990 -> 464000: the resource-mode
         // selector matches, without importing unrelated later text signatures.
-        (7664, 0x8ba4d6240ac73523) => Some((26064, 0xec4630efb73656f1,
-            NativeRuntimeProfile { abi: ethornell_vm::NativeAbiProfile::Anipani, ..NativeRuntimeProfile::default() })),
+        (7664, 0x8ba4d6240ac73523) => Some((
+            26064,
+            0xec4630efb73656f1,
+            NativeRuntimeProfile {
+                abi: ethornell_vm::NativeAbiProfile::Anipani,
+                ..NativeRuntimeProfile::default()
+            },
+        )),
         // Japanese retail release, system.arc dated 2019-12-10.
         (7536, 0xaa1f17da017b7c27) => Some((24368, 0xe221d8b4be4f097a, amachoco)),
         // Houkago Cinderella FD's validator sub_4A6C30 accepts SE 0..128.
@@ -318,7 +324,8 @@ fn resource_native_profile(manager: &ResourceManager, bootstrap: &[u8]) -> Nativ
         // lovepical: original pointer resolver uses code/data tags 1/2 <<28;
         // native startup still allocates 8 MiB code / 4 MiB data, 128 SE slots.
         (14320, 0xce17f41f47bd9ebd) => Some((
-            13200, 0xe03d3384de352602,
+            13200,
+            0xe03d3384de352602,
             NativeRuntimeProfile {
                 se_channels: 128,
                 abi: ethornell_vm::NativeAbiProfile::Modern,
@@ -332,7 +339,8 @@ fn resource_native_profile(manager: &ResourceManager, bootstrap: &[u8]) -> Nativ
         // dokai: original pointer resolver uses code/data tags 1/2 <<28;
         // native startup still allocates 8 MiB code / 4 MiB data, 128 SE slots.
         (14320, 0xc2ea2dbd2a040102) => Some((
-            13200, 0x23b31f6761fd962c,
+            13200,
+            0x23b31f6761fd962c,
             NativeRuntimeProfile {
                 se_channels: 128,
                 abi: ethornell_vm::NativeAbiProfile::Modern,
@@ -406,7 +414,11 @@ pub fn run(config: AppConfig) -> Result<()> {
         );
     }
     let manager = ResourceManager::open_game(config.game_root.path())?;
-    let manager = if config.script.is_none() { manager.for_native_bootstrap(None)? } else { manager };
+    let manager = if config.script.is_none() {
+        manager.for_native_bootstrap(None)?
+    } else {
+        manager
+    };
     tracing::info!(
         archives = manager.archives().archives.len(),
         resources = manager.resource_count(),
@@ -444,9 +456,11 @@ pub fn run(config: AppConfig) -> Result<()> {
     tracing::info!(script = startup_script, "selected runtime bootstrap script");
     // A title bitmap cannot substitute for a running interpreter: it has no
     // native button objects, input handlers or title script state.
-    let bytes = startup_bytes.map_err(|error| EthornellError::Other(format!(
-        "native bootstrap {startup_script} could not be loaded: {error}"
-    )))?;
+    let bytes = startup_bytes.map_err(|error| {
+        EthornellError::Other(format!(
+            "native bootstrap {startup_script} could not be loaded: {error}"
+        ))
+    })?;
     let runtime = Some(RuntimeEngine::new(
         startup_script,
         &bytes,
@@ -457,7 +471,9 @@ pub fn run(config: AppConfig) -> Result<()> {
         !headless,
         encoding,
     ));
-    let _glyph_session = runtime.as_ref().map(|runtime| runtime.api.glyph_images.enter_session());
+    let _glyph_session = runtime
+        .as_ref()
+        .map(|runtime| runtime.api.glyph_images.enter_session());
     let image: Option<DecodedImage> = None;
     if config.trace
         && let Some(image) = image.as_ref()
@@ -1901,7 +1917,9 @@ impl RuntimeTraceApi {
         let bytes = {
             self.sweep_unreferenced_archive_images();
             let entry = find_runtime_resource(&self.manager, archive, resource)?;
-            self.movie_read_buffer.load_decoded(&self.manager, &entry).ok()?
+            self.movie_read_buffer
+                .load_decoded(&self.manager, &entry)
+                .ok()?
         };
         #[cfg(not(feature = "console"))]
         let bytes = MovieBytes::from_vec(read_runtime_bytes(&self.manager, archive, resource)?);
@@ -5050,7 +5068,10 @@ impl RuntimeTraceApi {
         // returned 0.
         self.clear_bitmap_text(surface);
         // So does its caret (child sprite 0).
-        if self.message_caret.is_some_and(|caret| caret.window == surface) {
+        if self
+            .message_caret
+            .is_some_and(|caret| caret.window == surface)
+        {
             self.message_caret = None;
         }
         self.graph_object_layers.remove(&surface);
@@ -8254,8 +8275,13 @@ impl RuntimeTraceApi {
 
     fn graph_draw_items_with_link_masks(&self, include_masks: bool) -> Vec<RuntimeGraphDrawItem> {
         let mask_owners = if include_masks {
-            self.graph91_sprite_relations.values().copied().collect::<BTreeSet<_>>()
-        } else { BTreeSet::new() };
+            self.graph91_sprite_relations
+                .values()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        } else {
+            BTreeSet::new()
+        };
         let mut items = Vec::new();
         // Compatibility-only title items are added only when the target graph
         // scripts have loaded resources but have not yet materialized matching
@@ -8445,22 +8471,30 @@ impl RuntimeTraceApi {
             if opacity <= 0.001 && !is_link_mask {
                 continue;
             }
-            if !is_link_mask && layer.target_surface.is_some_and(|surface| {
-                self.graph_surfaces
-                    .get(&surface)
-                    .is_some_and(|record| !self.surface_display_chain_visible(surface, record))
-            }) {
+            if !is_link_mask
+                && layer.target_surface.is_some_and(|surface| {
+                    self.graph_surfaces
+                        .get(&surface)
+                        .is_some_and(|record| !self.surface_display_chain_visible(surface, record))
+                })
+            {
                 continue;
             }
             // A bitmap mutation may move an archive-backed slot to a runtime
             // image without reconfiguring its sprites (e.g. Graph90:13).
             // Resolve raw primary bindings live; retain generated mode rasters.
-            let raw_sprite = self.display_tree.kind(layer.owner_object.unwrap_or(*layer_id))
+            let raw_sprite = self
+                .display_tree
+                .kind(layer.owner_object.unwrap_or(*layer_id))
                 == Some(NativeDisplayKind::Sprite)
                 && (!layer.key.starts_with("runtime:") || layer.key.starts_with("runtime:bitmap:"));
-            let primary = node_properties.or(owner_properties).and_then(|p| p.format_resource);
+            let primary = node_properties
+                .or(owner_properties)
+                .and_then(|p| p.format_resource);
             let primary_key = primary.and_then(|bitmap| self.resolve_resource_key(bitmap));
-            if raw_sprite && primary.is_some() && primary_key.is_none() { continue; }
+            if raw_sprite && primary.is_some() && primary_key.is_none() {
+                continue;
+            }
             let draw_key = self
                 .aux_masked_sprites
                 .get(layer_id)
@@ -9725,8 +9759,9 @@ impl RuntimeEngine {
             }
             None => self.api.native_root.clone(),
         };
-        let manager = match ResourceManager::open_game(&native_root).and_then(|manager|
-            manager.for_native_bootstrap(self.api.manager.archive_language())) {
+        let manager = match ResourceManager::open_game(&native_root)
+            .and_then(|manager| manager.for_native_bootstrap(self.api.manager.archive_language()))
+        {
             Ok(manager) => manager,
             Err(err) => {
                 tracing::warn!(%err, root = %native_root.display(), "bootstrap root unusable");
@@ -10442,14 +10477,51 @@ mod input_tests {
     #[test]
     fn unknown_native_host_calls_fail_without_acknowledgement() {
         use ethornell_vm::{NativeCallFrame, NativeOpcode, VmError};
-        let manager = ethornell_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let manager =
+            ethornell_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
         let mut api = super::RuntimeTraceApi::new(manager);
-        let mut call = NativeCallFrame::new(NativeOpcode { group:0x80,id:u16::MAX },vec![]);
-        assert!(matches!(ethornell_vm::SysApi::call_sys(&mut api,&mut call),Err(VmError::UnknownDispatch { group:0x80,id:u16::MAX })));
-        let mut call = NativeCallFrame::new(NativeOpcode { group:0x91,id:u16::MAX },vec![]);
-        assert!(matches!(ethornell_vm::GraphApi::call_graph(&mut api,&mut call),Err(VmError::UnknownDispatch { group:0x91,id:u16::MAX })));
-        let mut call = NativeCallFrame::new(NativeOpcode { group:0xa0,id:u16::MAX },vec![]);
-        assert!(matches!(ethornell_vm::SoundApi::call_sound(&mut api,&mut call),Err(VmError::UnknownDispatch { group:0xa0,id:u16::MAX })));
+        let mut call = NativeCallFrame::new(
+            NativeOpcode {
+                group: 0x80,
+                id: u16::MAX,
+            },
+            vec![],
+        );
+        assert!(matches!(
+            ethornell_vm::SysApi::call_sys(&mut api, &mut call),
+            Err(VmError::UnknownDispatch {
+                group: 0x80,
+                id: u16::MAX
+            })
+        ));
+        let mut call = NativeCallFrame::new(
+            NativeOpcode {
+                group: 0x91,
+                id: u16::MAX,
+            },
+            vec![],
+        );
+        assert!(matches!(
+            ethornell_vm::GraphApi::call_graph(&mut api, &mut call),
+            Err(VmError::UnknownDispatch {
+                group: 0x91,
+                id: u16::MAX
+            })
+        ));
+        let mut call = NativeCallFrame::new(
+            NativeOpcode {
+                group: 0xa0,
+                id: u16::MAX,
+            },
+            vec![],
+        );
+        assert!(matches!(
+            ethornell_vm::SoundApi::call_sound(&mut api, &mut call),
+            Err(VmError::UnknownDispatch {
+                group: 0xa0,
+                id: u16::MAX
+            })
+        ));
     }
 
     #[test]
@@ -10486,7 +10558,10 @@ mod input_tests {
         // Release, Sys80:5F, rebuild: the shape of Wonderful Everyday's
         // button bar between two lines. The rebuild belongs to the same
         // frame; a thread that only polls and yields does not get more passes.
-        let instruction = |offset: u64, name: &'static str, raw: Vec<u8>, operands: Vec<BpOperand>| BpInstruction {
+        let instruction = |offset: u64,
+                           name: &'static str,
+                           raw: Vec<u8>,
+                           operands: Vec<BpOperand>| BpInstruction {
             offset,
             opcode: BpOpcode::Known { code: raw[0], name },
             operands: operands.into_boxed_slice(),
@@ -10553,7 +10628,10 @@ mod input_tests {
         // processor again, yields, then releases it with its window). The
         // release belongs to the same frame, so the rebuilt buttons are never
         // on screen.
-        let instruction = |offset: u64, name: &'static str, raw: Vec<u8>, operands: Vec<BpOperand>| BpInstruction {
+        let instruction = |offset: u64,
+                           name: &'static str,
+                           raw: Vec<u8>,
+                           operands: Vec<BpOperand>| BpInstruction {
             offset,
             opcode: BpOpcode::Known { code: raw[0], name },
             operands: operands.into_boxed_slice(),
@@ -11807,12 +11885,16 @@ mod input_tests {
 
     #[test]
     fn native_filter_reuses_pixels_and_invalidates_on_parameter_change() {
-        let manager = ethornell_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let manager =
+            ethornell_archive::ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap();
         let mut api = super::RuntimeTraceApi::new(manager);
         api.screen_width = 8;
         api.screen_height = 8;
-        let Value::Int(filter) = call_graph(&mut api, 0x90, 0x60, &mut Vec::new()).unwrap() else { panic!() };
-        api.configure_native_filter(0x65, &[filter, 0xff0000, 128, 0]).unwrap();
+        let Value::Int(filter) = call_graph(&mut api, 0x90, 0x60, &mut Vec::new()).unwrap() else {
+            panic!()
+        };
+        api.configure_native_filter(0x65, &[filter, 0xff0000, 128, 0])
+            .unwrap();
         let key = format!("runtime:filter:{filter}");
         let first = api.graph_images[&key].clone();
         let revision = api.graph_image_revision(&key);
@@ -11827,10 +11909,17 @@ mod input_tests {
         api.refresh_native_filters();
         assert_ne!(api.graph_image_revision(&key), revision);
         assert_ne!(api.graph_images[&key], first);
-        api.store_runtime_bitmap(13, DecodedImage {
-            width: 8, height: 8, rgba: vec![0; 8 * 8 * 4],
-        }, 3);
-        api.configure_native_filter(0x66, &[filter, 0, 0xff0000, 13, 0, 128, 0]).unwrap();
+        api.store_runtime_bitmap(
+            13,
+            DecodedImage {
+                width: 8,
+                height: 8,
+                rgba: vec![0; 8 * 8 * 4],
+            },
+            3,
+        );
+        api.configure_native_filter(0x66, &[filter, 0, 0xff0000, 13, 0, 128, 0])
+            .unwrap();
         let revision = api.graph_image_revision(&key);
         let mask_key = api.graph_resources[&13].key.clone();
         let mut mask = api.graph_images[&mask_key].clone();
@@ -11894,7 +11983,11 @@ mod input_tests {
         // Wonderful Everyday's boot script sets 0x80000004: ignored.
         let mut unknown_property = vec![Value::Int(0x8000_0004_u32 as i32), Value::Int(1)];
         call_graph(&mut api, 0x91, 0x9a, &mut unknown_property).unwrap();
-        assert!(!api.graph_config.text_global_properties.contains_key(&0x8000_0004));
+        assert!(
+            !api.graph_config
+                .text_global_properties
+                .contains_key(&0x8000_0004)
+        );
 
         assert!(api.graph_surfaces[&surface].isolated_group);
         assert_eq!(api.graph_surfaces[&surface].line_spacing_percent, 50);
@@ -12810,18 +12903,30 @@ mod input_tests {
         // dimensions and resource identity, rather than creating screen size.
         api.recreate_native_bitmap(129, 2, 1, 1);
         let mut capture = [129, 0, 0, 71].map(Value::Int).to_vec();
-        assert_eq!(call_graph(&mut api, 0x91, 0x05, &mut capture).unwrap(), Value::Int(0));
+        assert_eq!(
+            call_graph(&mut api, 0x91, 0x05, &mut capture).unwrap(),
+            Value::Int(0)
+        );
         let captured = api.graph_bitmap_image(129).unwrap();
         assert_eq!((captured.width, captured.height), (2, 1));
         assert_eq!(&captured.rgba[..4], &[200, 100, 50, 255]);
         let mut outside = [129, -1, 0, 71].map(Value::Int).to_vec();
         call_graph(&mut api, 0x91, 0x05, &mut outside).unwrap();
-        assert_eq!(&api.graph_bitmap_image(129).unwrap().rgba[..4], &[0, 0, 0, 255]);
+        assert_eq!(
+            &api.graph_bitmap_image(129).unwrap().rgba[..4],
+            &[0, 0, 0, 255]
+        );
         let mut missing = [130, 0, 0, 71].map(Value::Int).to_vec();
-        assert_eq!(call_graph(&mut api, 0x91, 0x05, &mut missing).unwrap(), Value::Int(2));
+        assert_eq!(
+            call_graph(&mut api, 0x91, 0x05, &mut missing).unwrap(),
+            Value::Int(2)
+        );
         api.recreate_native_bitmap(130, 1, 1, 2);
         let mut incompatible = [130, 0, 0, 71].map(Value::Int).to_vec();
-        assert_eq!(call_graph(&mut api, 0x91, 0x05, &mut incompatible).unwrap(), Value::Int(1));
+        assert_eq!(
+            call_graph(&mut api, 0x91, 0x05, &mut incompatible).unwrap(),
+            Value::Int(1)
+        );
     }
 
     #[test]
@@ -14609,13 +14714,22 @@ mod input_tests {
         let Value::Int(sprite) = call_graph(&mut api, 0x90, 0x50, &mut vec![]).unwrap() else {
             panic!()
         };
-        assert_eq!(api.graph91_object_get_property(sprite, 0x10, 0), Ok(vec![-1]));
+        assert_eq!(
+            api.graph91_object_get_property(sprite, 0x10, 0),
+            Ok(vec![-1])
+        );
         let mut configure = [sprite, 10, 20, 501, 1, 32, 123].map(Value::Int).to_vec();
         call_graph(&mut api, 0x90, 0x56, &mut configure).unwrap();
-        assert_eq!(api.graph91_object_get_property(sprite, 0x10, 0), Ok(vec![501]));
+        assert_eq!(
+            api.graph91_object_get_property(sprite, 0x10, 0),
+            Ok(vec![501])
+        );
         let mut property = [sprite, 0x10, 502, -999].map(Value::Int).to_vec();
         call_graph(&mut api, 0x90, 0x38, &mut property).unwrap();
-        assert_eq!(api.graph91_object_get_property(sprite, 0x10, 0), Ok(vec![502]));
+        assert_eq!(
+            api.graph91_object_get_property(sprite, 0x10, 0),
+            Ok(vec![502])
+        );
         assert!(property.is_empty());
         let layer = &api.graph_layers[&sprite];
         assert_eq!(
@@ -14642,7 +14756,10 @@ mod input_tests {
                 .insert("target-object-mode".into(), mode);
             let mut ignored = [sprite, 0x10, -1, 0].map(Value::Int).to_vec();
             call_graph(&mut api, 0x90, 0x38, &mut ignored).unwrap();
-            assert_eq!(api.graph91_object_get_property(sprite, 0x10, 0), Ok(vec![502]));
+            assert_eq!(
+                api.graph91_object_get_property(sprite, 0x10, 0),
+                Ok(vec![502])
+            );
             assert_eq!(
                 api.graph_object_properties[&sprite].format_resource,
                 Some(502)
@@ -15367,7 +15484,8 @@ mod input_tests {
                 clip: None,
             },
         );
-        api.graph_object_layers.insert(target, [target].into_iter().collect());
+        api.graph_object_layers
+            .insert(target, [target].into_iter().collect());
         let mut create = vec![Value::Int(target)];
         let handle = match call_graph(&mut api, 0x90, 0xd0, &mut create).unwrap() {
             Value::Int(handle) => handle,
@@ -15385,9 +15503,11 @@ mod input_tests {
         // Like sub_46CBC0 -> sub_477650, a higher input scope blocks the
         // wrapper even when its rectangle contains the pointer.
         let scope = api.graph90_native_sort_key(handle).unwrap_or_default();
-        api.registered_pointer_input_scopes.register((scope + 1) as i32);
+        api.registered_pointer_input_scopes
+            .register((scope + 1) as i32);
         assert_eq!(api.graph_knob_at_point((110.0, 210.0)), None);
-        api.registered_pointer_input_scopes.unregister_one((scope + 1) as i32);
+        api.registered_pointer_input_scopes
+            .unregister_one((scope + 1) as i32);
         let mut disable_wheel = vec![Value::Int(0)];
         assert_eq!(
             call_graph(&mut api, 0x90, 0xdd, &mut disable_wheel).unwrap(),
@@ -16941,7 +17061,11 @@ mod input_tests {
         api.start_native_message(" part two.".into(), Some(window));
         // The page keeps the window's whole width: the first part doesn't
         // reflow.
-        assert!(api.text_runtime.current_visible_text().starts_with(&first_layout));
+        assert!(
+            api.text_runtime
+                .current_visible_text()
+                .starts_with(&first_layout)
+        );
         assert_eq!(
             api.window_text_state(Some(window)).width,
             1128.0 - api.surface_text_states[&window].cursor_x as f32
@@ -17073,11 +17197,12 @@ mod input_tests {
 
         // Graph92:8E clears both.
         call_graph(&mut api, 0x92, 0x8e, &mut vec![Value::Int(window)]).unwrap();
-        assert!(api
-            .text_nodes
-            .values()
-            .filter(|node| node.target_surface == Some(window))
-            .all(|node| node.text.is_empty()));
+        assert!(
+            api.text_nodes
+                .values()
+                .filter(|node| node.target_surface == Some(window))
+                .all(|node| node.text.is_empty())
+        );
         assert_eq!(api.surface_text_states[&window].cursor_x, home.cursor_x);
         assert_eq!(api.surface_text_states[&window].cursor_y, home.cursor_y);
     }
@@ -17091,8 +17216,11 @@ mod input_tests {
         api.graph_surfaces
             .insert(window, RuntimeSurface::display(window, 1128.0, 400.0));
         api.reset_window_text_cursor(window);
-        let without_spaces =
-            |text: &str| text.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+        let without_spaces = |text: &str| {
+            text.chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect::<String>()
+        };
 
         // A skipped line extended in parts: the second part starts where
         // the first one ends, near the right edge, goes on to the edge and
@@ -17849,7 +17977,10 @@ mod input_tests {
         // logwnd._bp calls 92:1B(B, X, 1) once per entry; through the VM the
         // call must receive all three arguments (it was a stub without an
         // arity, which got none).
-        let instruction = |offset: u64, name: &'static str, raw: Vec<u8>, operands: Vec<BpOperand>| BpInstruction {
+        let instruction = |offset: u64,
+                           name: &'static str,
+                           raw: Vec<u8>,
+                           operands: Vec<BpOperand>| BpInstruction {
             offset,
             opcode: BpOpcode::Known { code: raw[0], name },
             operands: operands.into_boxed_slice(),
@@ -17960,7 +18091,13 @@ mod input_tests {
         assert_eq!(copied.rgba, image.rgba);
         let mut composed = glyph;
         assert!(crate::bitmap_blend::blit_alpha_over_parameter(
-            &mut composed, 2, &copied, 2, -8, -8, 64
+            &mut composed,
+            2,
+            &copied,
+            2,
+            -8,
+            -8,
+            64
         ));
         let at = |x: usize, y: usize| composed.rgba[(y * 5 + x) * 4..][..4].to_vec();
         assert_eq!(at(2, 2), [0, 0, 0, 255]);
@@ -20029,9 +20166,18 @@ mod input_tests {
         assert!(api.pending_input_consumed);
         assert_eq!(api.pending_click, None);
         assert!(!api.mouse_pressed);
-        assert!(!api.input_physically_held.contains(&super::INPUT_DESCRIPTOR_MOUSE_LEFT));
-        assert!(!api.input_down_descriptors.contains(&super::INPUT_DESCRIPTOR_MOUSE_LEFT));
-        assert_eq!(SysApi::read_input_state(&mut api, super::INPUT_DESCRIPTOR_MOUSE_LEFT), 0);
+        assert!(
+            !api.input_physically_held
+                .contains(&super::INPUT_DESCRIPTOR_MOUSE_LEFT)
+        );
+        assert!(
+            !api.input_down_descriptors
+                .contains(&super::INPUT_DESCRIPTOR_MOUSE_LEFT)
+        );
+        assert_eq!(
+            SysApi::read_input_state(&mut api, super::INPUT_DESCRIPTOR_MOUSE_LEFT),
+            0
+        );
 
         api.finish_native_tick_input();
         super::apply_runtime_input_event(
@@ -22307,7 +22453,9 @@ impl ethornell_vm::SysApi for RuntimeTraceApi {
 
     fn disk_file_exists(&mut self, path: &str) -> bool {
         if let Some(policy) = file_policy::active() {
-            return policy.user_metadata(path).is_some_and(|meta| !meta.is_dir());
+            return policy
+                .user_metadata(path)
+                .is_some_and(|meta| !meta.is_dir());
         }
         find_runtime_file_from_root(&self.manager, &self.native_root, "", path)
             .is_some_and(|host| host.is_file())
@@ -22540,28 +22688,46 @@ impl ethornell_vm::SysApi for RuntimeTraceApi {
                 ArchiveLanguage::Korean => 0x0412,
             };
         }
-        let locale = std::env::var("LC_ALL").or_else(|_| std::env::var("LC_MESSAGES"))
-            .or_else(|_| std::env::var("LANG")).unwrap_or_default().to_ascii_lowercase();
-        if locale.starts_with("ja") { 0x0411 }
-        else if locale.starts_with("zh_tw") || locale.starts_with("zh_hk") { 0x0404 }
-        else if locale.starts_with("zh") { 0x0804 }
-        else if locale.starts_with("ko") { 0x0412 }
-        else { 0x0409 }
+        let locale = std::env::var("LC_ALL")
+            .or_else(|_| std::env::var("LC_MESSAGES"))
+            .or_else(|_| std::env::var("LANG"))
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if locale.starts_with("ja") {
+            0x0411
+        } else if locale.starts_with("zh_tw") || locale.starts_with("zh_hk") {
+            0x0404
+        } else if locale.starts_with("zh") {
+            0x0804
+        } else if locale.starts_with("ko") {
+            0x0412
+        } else {
+            0x0409
+        }
     }
 
-    fn register_installation(&mut self, company: &str, product: &str, folder: &str) -> ethornell_vm::VmResult<()> {
+    fn register_installation(
+        &mut self,
+        company: &str,
+        product: &str,
+        folder: &str,
+    ) -> ethornell_vm::VmResult<()> {
         // BP 0x73 / FD sub_486710: a persistent company/product folder record.
         // Keep this in the host-owned user capability instead of HKLM.
         const PATH: &str = "bgi-user/installations.json";
         let mut records: BTreeMap<String, String> = match self.read_user_file_bytes(PATH) {
-            Some(bytes) => serde_json::from_slice(&bytes).map_err(|error| ethornell_vm::VmError::Runtime(format!("installation metadata: {error}")))?,
+            Some(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
+                ethornell_vm::VmError::Runtime(format!("installation metadata: {error}"))
+            })?,
             None => BTreeMap::new(),
         };
         let key = serde_json::to_string(&(company, product)).expect("strings serialize");
         records.insert(key, format!("\"{folder}\""));
         let bytes = serde_json::to_vec(&records).expect("string records serialize");
         if !self.write_file_bytes(PATH, &bytes) {
-            return Err(ethornell_vm::VmError::Runtime("cannot persist installation metadata".into()));
+            return Err(ethornell_vm::VmError::Runtime(
+                "cannot persist installation metadata".into(),
+            ));
         }
         Ok(())
     }
@@ -22575,7 +22741,11 @@ impl ethornell_vm::SysApi for RuntimeTraceApi {
             caption.to_string()
         };
         if !self.native_dialog_presentation {
-            tracing::warn!(caption, message = text, "native message (offscreen; dialog suppressed)");
+            tracing::warn!(
+                caption,
+                message = text,
+                "native message (offscreen; dialog suppressed)"
+            );
             return;
         }
         host_dialog::show_message(
@@ -22679,7 +22849,12 @@ impl ethornell_vm::SysApi for RuntimeTraceApi {
     ) -> Vec<String> {
         if let Some(policy) = file_policy::active() {
             return policy
-                .enumerate_user(&user_files::native_enumeration_pattern(pattern), recursive, max_count, false)
+                .enumerate_user(
+                    &user_files::native_enumeration_pattern(pattern),
+                    recursive,
+                    max_count,
+                    false,
+                )
                 .unwrap_or_default();
         }
         let normalized = pattern.replace('\\', "/");
@@ -23698,7 +23873,9 @@ impl ethornell_vm::SysApi for RuntimeTraceApi {
             // lookup must not turn the absence of metadata into a fatal error.
             // A package's own installation snapshot relocates to this mount;
             // no native registry or historical external path is ever read.
-            return self.mounted_installations.contains(vendor, product)
+            return self
+                .mounted_installations
+                .contains(vendor, product)
                 .then(|| "bgi-resource\\".into());
         }
         if let Some(path) = host_installer::read_installed_folder(vendor, product) {
@@ -25113,23 +25290,42 @@ impl ethornell_vm::GraphApi for RuntimeTraceApi {
         Some([x, y])
     }
 
-    fn register_named_font_transform(&mut self, name: &str, values: [i32; 5]) -> ethornell_vm::VmResult<()> {
+    fn register_named_font_transform(
+        &mut self,
+        name: &str,
+        values: [i32; 5],
+    ) -> ethornell_vm::VmResult<()> {
         self.register_native_named_font_transform(name, values)
     }
     fn set_named_font_tracking(&mut self, name: &str, tracking: i32) -> ethornell_vm::VmResult<()> {
         if !(-65536..=65536).contains(&tracking) {
-            return Err(ethornell_vm::VmError::Runtime(format!("無効な値 [ {} ] が指定されました", tracking as f32 / 65536.0)));
+            return Err(ethornell_vm::VmError::Runtime(format!(
+                "無効な値 [ {} ] が指定されました",
+                tracking as f32 / 65536.0
+            )));
         }
-        let transform = self.graph91_font_transforms.get_mut(&name.to_ascii_lowercase())
-            .ok_or_else(|| ethornell_vm::VmError::Runtime(format!("未登録のフォント名 [ {name} ] が指定されました")))?;
+        let transform = self
+            .graph91_font_transforms
+            .get_mut(&name.to_ascii_lowercase())
+            .ok_or_else(|| {
+                ethornell_vm::VmError::Runtime(format!(
+                    "未登録のフォント名 [ {name} ] が指定されました"
+                ))
+            })?;
         transform.tracking = tracking;
         Ok(())
     }
 
     fn window_last_text_extent(&self, window: i32) -> Option<i32> {
-        if self.display_tree.kind(window) != Some(crate::display_tree::NativeDisplayKind::Window) { return None; }
+        if self.display_tree.kind(window) != Some(crate::display_tree::NativeDisplayKind::Window) {
+            return None;
+        }
         self.graph_surfaces.get(&window)?;
-        Some(self.surface_text_states.get(&window).map_or(0, |state| state.last_text_extent))
+        Some(
+            self.surface_text_states
+                .get(&window)
+                .map_or(0, |state| state.last_text_extent),
+        )
     }
 
     fn native_font_registered(&self, font: i32) -> bool {
@@ -26841,7 +27037,8 @@ impl ethornell_vm::GraphApi for RuntimeTraceApi {
                         binding.key = key;
                         binding.source_rect = None;
                     } else {
-                        self.graph_resources.insert(bitmap_id, RuntimeGraphResource::whole(key));
+                        self.graph_resources
+                            .insert(bitmap_id, RuntimeGraphResource::whole(key));
                     }
                     if let Some(surface) = self.graph_surfaces.get_mut(&bitmap_id) {
                         surface.resource_id = Some(bitmap_id);
@@ -29328,11 +29525,14 @@ impl ethornell_vm::SoundApi for RuntimeTraceApi {
         // These existing logical faces resolve to the bundled CJK fallback,
         // which renders Latin, Japanese, Simplified and Traditional Chinese.
         // Arbitrary interned names are not an installed-font inventory.
-        ethornell_vm::SoundApi::user_font_families(self).into_iter().map(|name| ethornell_vm::FontFamily {
-            name,
-            charsets: vec![0, 128, 134, 136],
-            pitch_and_family: 2,
-        }).collect()
+        ethornell_vm::SoundApi::user_font_families(self)
+            .into_iter()
+            .map(|name| ethornell_vm::FontFamily {
+                name,
+                charsets: vec![0, 128, 134, 136],
+                pitch_and_family: 2,
+            })
+            .collect()
     }
 
     fn show_user_dialog(

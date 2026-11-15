@@ -17,38 +17,38 @@ use std::sync::{
 mod async_program;
 mod child_thread;
 mod compact_bp;
-mod modern_bp;
 pub mod cpu_record;
 mod debug;
 mod extended_opcodes;
 mod host_request;
 mod input;
 mod local_window;
+mod modern_bp;
 pub use local_window::VmMemory;
+mod font_catalog;
 mod logic;
 pub mod native_call;
+mod native_encoding;
 pub mod native_input;
 pub mod native_motion;
 pub mod native_ownership;
 pub mod native_selection;
 mod native_strings;
-mod native_encoding;
-mod font_catalog;
-mod native_utf8_probe;
 pub mod native_thread;
+mod native_utf8_probe;
 mod procedure_class_map;
 mod profile;
 mod program_thread;
 mod records;
 mod resource_io;
 mod scenario;
-mod stream_io;
-mod sentence_table;
 mod scheduler;
+mod sentence_table;
+mod stream_io;
 mod system80_state;
 mod system81_state;
-pub mod target_thread;
 mod target_heap;
+pub mod target_thread;
 mod time;
 mod user_data;
 mod user_dialog;
@@ -417,8 +417,10 @@ pub trait SysApi {
         false
     }
     /// Opt-in numeric diagnostic only; never affects execution or guest state.
-    fn input_gate_diagnostics_enabled(&self)->bool {false}
-    fn record_input_gate(&mut self,_values:[u32;9]) {}
+    fn input_gate_diagnostics_enabled(&self) -> bool {
+        false
+    }
+    fn record_input_gate(&mut self, _values: [u32; 9]) {}
 
     /// Some(nonzero id) transfers this call to a VM continuation; None leaves
     /// the original desktop implementation in charge. IDs must be unique for
@@ -1122,7 +1124,9 @@ pub trait SysApi {
         false
     }
 
-    fn user_ui_language(&mut self) -> i32 { 0x0409 }
+    fn user_ui_language(&mut self) -> i32 {
+        0x0409
+    }
 
     fn launcher_mode(&mut self) -> i32 {
         0
@@ -1130,10 +1134,16 @@ pub trait SysApi {
     /// Portable host registration for BP 0x73's company/product InstalledFolder.
     /// It must persist metadata in the authorized user store, without requiring
     /// access to a machine-wide Windows registry on other platforms.
-    fn register_installation(&mut self, _company: &str, _product: &str, _folder: &str) -> VmResult<()> {
-        Err(VmError::Runtime("installation metadata host is not connected".into()))
+    fn register_installation(
+        &mut self,
+        _company: &str,
+        _product: &str,
+        _folder: &str,
+    ) -> VmResult<()> {
+        Err(VmError::Runtime(
+            "installation metadata host is not connected".into(),
+        ))
     }
-
 
     fn take_frame_yield(&mut self) -> bool {
         false
@@ -1162,7 +1172,15 @@ pub struct GraphIconRecord {
 
 pub trait GraphApi {
     /// 90:78 / 424010 copies width*height native little-endian u16 tiles.
-    fn upload_map_tile_data(&mut self,_object:i32,_width:u32,_height:u32,_tiles:&[u16])->bool {false}
+    fn upload_map_tile_data(
+        &mut self,
+        _object: i32,
+        _width: u32,
+        _height: u32,
+        _tiles: &[u16],
+    ) -> bool {
+        false
+    }
 
     fn call_graph(&mut self, call: &mut NativeCallFrame) -> VmResult<Value>;
 
@@ -1183,15 +1201,21 @@ pub trait GraphApi {
 
     /// Register a native named-font coverage transform and tracking descriptor.
     fn register_named_font_transform(&mut self, _name: &str, _values: [i32; 5]) -> VmResult<()> {
-        Err(VmError::Runtime("named font transform host is not connected".into()))
+        Err(VmError::Runtime(
+            "named font transform host is not connected".into(),
+        ))
     }
     fn set_named_font_tracking(&mut self, _name: &str, _tracking: i32) -> VmResult<()> {
-        Err(VmError::Runtime("named font tracking host is not connected".into()))
+        Err(VmError::Runtime(
+            "named font tracking host is not connected".into(),
+        ))
     }
 
     /// Last glyph's horizontal extent relative to the message's start,
     /// stored by CDspObjWindow+0x3A0 (FD Graph92:95).
-    fn window_last_text_extent(&self, _window: i32) -> Option<i32> { None }
+    fn window_last_text_extent(&self, _window: i32) -> Option<i32> {
+        None
+    }
 
     /// Returns the two DWORD globals written by target helper sub_434410
     /// when Graph92:9B is called with selector 256.
@@ -1320,16 +1344,23 @@ pub trait GraphApi {
         None
     }
 
-    fn configure_background_frames(&mut self,_frames:&[i32],_alpha:i32)->VmResult<()> {
+    fn configure_background_frames(&mut self, _frames: &[i32], _alpha: i32) -> VmResult<()> {
         Err(VmError::Runtime("BackD backend unavailable".into()))
     }
 
-    fn start_native_selection(&mut self, _request: native_selection::NativeSelectionRequest) -> VmResult<u64> {
+    fn start_native_selection(
+        &mut self,
+        _request: native_selection::NativeSelectionRequest,
+    ) -> VmResult<u64> {
         Err(VmError::Runtime("CProcSelect backend unavailable".into()))
     }
 
-    fn poll_native_selection(&mut self, _selection_id: u64, _callbacks: &[[i32; 2]], _cancelled: bool)
-        -> Option<native_selection::NativeSelectionCompletion> {
+    fn poll_native_selection(
+        &mut self,
+        _selection_id: u64,
+        _callbacks: &[[i32; 2]],
+        _cancelled: bool,
+    ) -> Option<native_selection::NativeSelectionCompletion> {
         None
     }
 
@@ -1947,8 +1978,14 @@ pub trait SoundApi {
     }
 
     fn user_font_catalog(&self) -> Vec<FontFamily> {
-        self.user_font_families().into_iter()
-            .map(|name| FontFamily { name, charsets: vec![128], pitch_and_family: 2 }).collect()
+        self.user_font_families()
+            .into_iter()
+            .map(|name| FontFamily {
+                name,
+                charsets: vec![128],
+                pitch_and_family: 2,
+            })
+            .collect()
     }
 
     fn show_user_dialog(&mut self, _request: UserDialogRequest) -> Option<UserDialogResponse> {
@@ -2314,14 +2351,12 @@ fn adjusted_desktop_dimensions((width, height): (u32, u32)) -> (u32, u32) {
     } else {
         width
     };
-    let adjusted_height = if width != 0
-        && height / width != 0
-        && 100u32.wrapping_mul(height) / width < 125
-    {
-        height >> 1
-    } else {
-        height
-    };
+    let adjusted_height =
+        if width != 0 && height / width != 0 && 100u32.wrapping_mul(height) / width < 125 {
+            height >> 1
+        } else {
+            height
+        };
     (adjusted_width, adjusted_height)
 }
 
@@ -2690,13 +2725,10 @@ impl Vm {
     /// Houkago FD sub_49A5AE uses 8 MiB code / 4 MiB data / 4096 slots;
     /// the default constructor retains sub_48C990's older limits. Children
     /// continue to use the region sizes supplied by Sys80:44.
-    pub fn with_main_thread_regions(
-        code_bytes: u32,
-        data_bytes: u32,
-        operand_slots: u32,
-    ) -> Self {
+    pub fn with_main_thread_regions(code_bytes: u32, data_bytes: u32, operand_slots: u32) -> Self {
         let mut vm = Self::new();
-        vm.thread.set_region_sizes(code_bytes, data_bytes, operand_slots);
+        vm.thread
+            .set_region_sizes(code_bytes, data_bytes, operand_slots);
         vm.sync_region_reservations(0);
         vm
     }
@@ -2709,7 +2741,10 @@ impl Vm {
 
     /// dword_503DE8 (Sys81:04): the largest clock step sub_499290 counts.
     pub fn clock_jump_threshold_ms(&self) -> u32 {
-        self.system81_shared.lock().expect("system81 state poisoned").clock_jump_threshold_ms as u32
+        self.system81_shared
+            .lock()
+            .expect("system81 state poisoned")
+            .clock_jump_threshold_ms as u32
     }
 
     /// How many threads ended their slice with Sys80:5F in the most recent
@@ -2796,10 +2831,10 @@ impl Vm {
     /// Debug harness entry for replaying a real loaded module with the
     /// initialized framework mediation table; never compiled into release.
     #[cfg(debug_assertions)]
-    pub fn diagnostic_start_with_initialized_framework(&mut self,program:&BpProgram) {
-        let mediation=self.mediation_programs.clone();
+    pub fn diagnostic_start_with_initialized_framework(&mut self, program: &BpProgram) {
+        let mediation = self.mediation_programs.clone();
         self.start(program);
-        self.mediation_programs=mediation;
+        self.mediation_programs = mediation;
     }
 
     pub fn run_loaded<A>(&mut self, api: &mut A, options: &VmRunOptions) -> VmRunReport
@@ -2858,7 +2893,10 @@ impl Vm {
         // 48D860 skips every non-owner before polling its CProcedure or
         // executing BP instructions. Child pumping above still reaches the
         // owner when the root itself is excluded.
-        let procedure_wait = if self.exclusive_thread_id.is_some_and(|owner| owner != self.thread.thread_id()) {
+        let procedure_wait = if self
+            .exclusive_thread_id
+            .is_some_and(|owner| owner != self.thread.thread_id())
+        {
             Some(VmStopReason::WaitingForProcedure)
         } else if let Some(error) = response_error {
             self.push_trace(format!("host response failed: {error}"));
@@ -2926,7 +2964,8 @@ impl Vm {
                 if self.recent_steps.len() >= 30 {
                     self.recent_steps.pop_front();
                 }
-                self.recent_steps.push_back((program_index, self.pc, inst.offset));
+                self.recent_steps
+                    .push_back((program_index, self.pc, inst.offset));
             }
             if trace_motion {
                 self.trace_mtn_body_dispatch(inst.offset);
@@ -3030,7 +3069,13 @@ impl Vm {
                     break;
                 }
                 Err(err) => {
-                    self.report_script_error(api, program_index, inst.offset as u32, inst.raw.first().copied().unwrap_or(0), &err);
+                    self.report_script_error(
+                        api,
+                        program_index,
+                        inst.offset as u32,
+                        inst.raw.first().copied().unwrap_or(0),
+                        &err,
+                    );
                     self.push_trace(format!("error: {err}"));
                     tracing::error!(
                         vm = self.trace_id,
@@ -3182,18 +3227,23 @@ impl Vm {
                 .then(|| {
                     let mut trace = Vec::new();
                     if stop_reason.is_fatal() {
-                        trace.extend(self.recent_steps.iter().map(|&(program_index, pc, offset)| {
-                            let program = &self.programs[program_index.min(self.programs.len().saturating_sub(1))];
-                            let (name, operands) = program
-                                .instructions
-                                .get(pc)
-                                .map(|inst| (inst.opcode.name(), format!("{:?}", inst.operands)))
-                                .unwrap_or(("?", String::new()));
-                            format!(
-                                "program={} pc={pc} off=0x{offset:08X} {name} {operands}",
-                                self.program_name(program_index)
-                            )
-                        }));
+                        trace.extend(self.recent_steps.iter().map(
+                            |&(program_index, pc, offset)| {
+                                let program = &self.programs
+                                    [program_index.min(self.programs.len().saturating_sub(1))];
+                                let (name, operands) = program
+                                    .instructions
+                                    .get(pc)
+                                    .map(|inst| {
+                                        (inst.opcode.name(), format!("{:?}", inst.operands))
+                                    })
+                                    .unwrap_or(("?", String::new()));
+                                format!(
+                                    "program={} pc={pc} off=0x{offset:08X} {name} {operands}",
+                                    self.program_name(program_index)
+                                )
+                            },
+                        ));
                     }
                     trace.extend(self.recent_trace.iter().cloned());
                     trace
@@ -3249,7 +3299,9 @@ impl Vm {
             BpOpcode::Known { code: 0x00, .. } => {
                 self.push_value(Value::Int(read_op_i32(instruction)));
             }
-            BpOpcode::Known { code: 0x01 | 0x02, .. } => {
+            BpOpcode::Known {
+                code: 0x01 | 0x02, ..
+            } => {
                 self.push_value(Value::Int(read_op_i32(instruction)));
             }
             BpOpcode::Known { code: 0x04, .. } => {
@@ -3276,16 +3328,28 @@ impl Vm {
                                 .is_some_and(|offset| (offset as usize) < program.code.len())
                         });
                     if let Some(target) = literal {
-                        let base = self.program_code_bases.get(program_index).copied().unwrap_or_default();
-                        self.push_value(Value::Ptr(self.bp_code_tag() | base.wrapping_add(target - start)));
+                        let base = self
+                            .program_code_bases
+                            .get(program_index)
+                            .copied()
+                            .unwrap_or_default();
+                        self.push_value(Value::Ptr(
+                            self.bp_code_tag() | base.wrapping_add(target - start),
+                        ));
                     } else {
                         self.push_value(Value::Str(text.clone()));
                     }
                 } else if let Some(BpOperand::Offset(offset)) = instruction.operands.first() {
                     // Opcode 0x05: `(pc_base + off) | 0x04000000`.
                     let program = &self.programs[program_index];
-                    let base = self.program_code_bases.get(program_index).copied().unwrap_or_default();
-                    let address = base.wrapping_add(offset.wrapping_sub(Self::program_parser_code_start(program)));
+                    let base = self
+                        .program_code_bases
+                        .get(program_index)
+                        .copied()
+                        .unwrap_or_default();
+                    let address = base.wrapping_add(
+                        offset.wrapping_sub(Self::program_parser_code_start(program)),
+                    );
                     self.push_value(Value::Ptr(self.bp_code_tag() | address));
                 }
             }
@@ -3295,18 +3359,39 @@ impl Vm {
                 let code = self.code_offset_of(program_index, read_op_u32(instruction));
                 self.push_value(Value::Int(code as i32));
             }
-            BpOpcode::Known { code: 0x03 | 0x0d | 0x0e | 0x13 | 0x36 | 0x37 | 0x3e | 0x3f | 0x45..=0x47 | 0x55 | 0xe3..=0xe7 | 0xec | 0xed, .. } => {
+            BpOpcode::Known {
+                code:
+                    0x03
+                    | 0x0d
+                    | 0x0e
+                    | 0x13
+                    | 0x36
+                    | 0x37
+                    | 0x3e
+                    | 0x3f
+                    | 0x45..=0x47
+                    | 0x55
+                    | 0xe3..=0xe7
+                    | 0xec
+                    | 0xed,
+                ..
+            } => {
                 if let Some(target) = self.execute_modern_bp(instruction)? {
                     let dest = self.code_offset_of(program_index, target);
-                    let (target_program, parser_offset) = self.resolve_code_target(program_index, dest);
+                    let (target_program, parser_offset) =
+                        self.resolve_code_target(program_index, dest);
                     self.current_program = target_program;
                     next_pc = self.jump_target_index(target_program, parser_offset)?;
                 }
             }
-            BpOpcode::Known { code: 0x0f | 0x12 | 0x18..=0x1f | 0x2c..=0x2f | 0x3b | 0x3c, .. } => {
+            BpOpcode::Known {
+                code: 0x0f | 0x12 | 0x18..=0x1f | 0x2c..=0x2f | 0x3b | 0x3c,
+                ..
+            } => {
                 if let Some(target) = self.execute_compact_bp(instruction)? {
                     let dest = self.code_offset_of(program_index, target);
-                    let (target_program, parser_offset) = self.resolve_code_target(program_index, dest);
+                    let (target_program, parser_offset) =
+                        self.resolve_code_target(program_index, dest);
                     self.current_program = target_program;
                     next_pc = self.jump_target_index(target_program, parser_offset)?;
                 }
@@ -3463,7 +3548,11 @@ impl Vm {
                     3 => value >= 0,
                     4 => value <= 0,
                     5 => value < 0,
-                    _ => return Err(VmError::Runtime(format!("invalid BP branch predicate {kind:#x}"))),
+                    _ => {
+                        return Err(VmError::Runtime(format!(
+                            "invalid BP branch predicate {kind:#x}"
+                        )));
+                    }
                 };
                 if trace_vm_branches_enabled() {
                     tracing::debug!(
@@ -3482,18 +3571,24 @@ impl Vm {
                     );
                 }
                 if take {
-                    let (target_program, parser_offset) = self.resolve_code_target(program_index, dest);
+                    let (target_program, parser_offset) =
+                        self.resolve_code_target(program_index, dest);
                     self.current_program = target_program;
                     next_pc = self.jump_target_index(target_program, parser_offset)?;
                 }
             }
-            BpOpcode::Known { code: 0x16 | 0xee | 0xef, .. } => match {
+            BpOpcode::Known {
+                code: 0x16 | 0xee | 0xef,
+                ..
+            } => match {
                 let target = if code == 0xee {
                     Value::Int(self.code_offset_of(program_index, read_op_u32(instruction)) as i32)
                 } else if code == 0xef {
                     let packed = read_op_u32(instruction);
                     self.read_value(packed & 0x3fff_ffff, compact_bp::width(packed >> 30))?
-                } else { self.pop_value()? };
+                } else {
+                    self.pop_value()?
+                };
                 if std::env::var_os("TRACE_SCRMAIN_DISPATCH").is_some()
                     && instruction.offset == 0x3f0
                     && self.program_name(program_index).contains("scrmain._bp")
@@ -3638,7 +3733,8 @@ impl Vm {
                             "VM ret"
                         );
                     }
-                    let (return_program, parser_offset) = self.resolve_code_target(program_id, ret_offset);
+                    let (return_program, parser_offset) =
+                        self.resolve_code_target(program_id, ret_offset);
                     self.current_program = return_program;
                     next_pc = self
                         .jump_target_index(return_program, parser_offset)
@@ -3765,7 +3861,9 @@ impl Vm {
                     (x.mul_add(x, y.mul_add(y, z * z)).sqrt()) as i32,
                 ));
             }
-            BpOpcode::Known { code: 0x48 | 0x49, .. } => {
+            BpOpcode::Known {
+                code: 0x48 | 0x49, ..
+            } => {
                 let angle = self.pop_int()? as f64;
                 let radians = angle * ((std::f64::consts::PI / 180.0) / 65_536.0);
                 let value = if code == 0x48 {
@@ -3775,14 +3873,22 @@ impl Vm {
                 };
                 self.push_value(Value::Int((value * 65_536.0) as i32));
             }
-            BpOpcode::Known { code: 0x50 | 0x51 | 0x52 | 0x53 | 0x54, .. } => {
+            BpOpcode::Known {
+                code: 0x50 | 0x51 | 0x52 | 0x53 | 0x54,
+                ..
+            } => {
                 self.execute_qword_arithmetic(code)?;
             }
-            BpOpcode::Known { code: 0x56 | 0x57, .. } => {
+            BpOpcode::Known {
+                code: 0x56 | 0x57, ..
+            } => {
                 let value = self.execute_fixed_arithmetic(code)?;
                 self.push_value(Value::Int(value));
             }
-            BpOpcode::Known { code: 0x58 | 0x59 | 0x5a | 0x5b | 0x5d | 0x5e | 0x5f, .. } => {
+            BpOpcode::Known {
+                code: 0x58 | 0x59 | 0x5a | 0x5b | 0x5d | 0x5e | 0x5f,
+                ..
+            } => {
                 self.execute_fixed_vector(code)?;
             }
             BpOpcode::Known { code: 0x60, .. } => {
@@ -4049,12 +4155,13 @@ impl Vm {
             BpOpcode::Known { code: 0x7f, .. } => {
                 self.execute_resource_blend()?;
             }
-            BpOpcode::Known { code: 0x80 | 0x81, .. } => {
+            BpOpcode::Known {
+                code: 0x80 | 0x81, ..
+            } => {
                 let id = instruction.raw.get(1).copied().unwrap_or_default() as u16;
                 self.note_call("sys", code, id);
                 api.observe_dispatch(NativeOpcode { group: code, id });
-                if fail_on_stub
-                    && !self.effective_strict_support(NativeOpcode { group: code, id })
+                if fail_on_stub && !self.effective_strict_support(NativeOpcode { group: code, id })
                 {
                     self.note_stub("sys", code, id);
                     return Err(VmError::UnknownDispatch { group: code, id });
@@ -4372,7 +4479,10 @@ impl Vm {
                 self.current_program = dest_program_index;
                 next_pc = self.jump_target_index(dest_program_index, 0x10)?;
             }
-            BpOpcode::Known { code: 0x90 | 0x91 | 0x92, .. } => {
+            BpOpcode::Known {
+                code: 0x90 | 0x91 | 0x92,
+                ..
+            } => {
                 let id = instruction.raw.get(1).copied().unwrap_or_default() as u16;
                 self.note_call("graph", code, id);
                 api.observe_dispatch(NativeOpcode { group: code, id });
@@ -4390,29 +4500,54 @@ impl Vm {
                     if let Some(operand) = self.operand_from_top(5) {
                         let raw = self.operand_value(operand).as_i32();
                         let normalized = self.native_glyph_registration_code(raw);
-                        if normalized < 0 && self.native_abi_profile != NativeAbiProfile::Anipani && !self.unicode_glyph_bridge {
-                            return Err(VmError::Runtime(format!("無効な文字コード [ {normalized} ] が指定されました")));
+                        if normalized < 0
+                            && self.native_abi_profile != NativeAbiProfile::Anipani
+                            && !self.unicode_glyph_bridge
+                        {
+                            return Err(VmError::Runtime(format!(
+                                "無効な文字コード [ {normalized} ] が指定されました"
+                            )));
                         }
                         self.replace_operand(operand, Value::Int(normalized));
                     }
                 }
-                let result = if (code, id) == (0x92, 0x0e) && matches!(self.native_abi_profile, NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern) {
+                let result = if (code, id) == (0x92, 0x0e)
+                    && matches!(
+                        self.native_abi_profile,
+                        NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern
+                    ) {
                     let pointer = self.pop_ptr()?;
                     let count = self.pop_int()?;
                     let name = self.pop_string_lossy()?;
-                    if !matches!(count, 4 | 5) { return Err(VmError::Runtime(format!("無効なパラメータ数 [ {count} ] が指定されました"))); }
+                    if !matches!(count, 4 | 5) {
+                        return Err(VmError::Runtime(format!(
+                            "無効なパラメータ数 [ {count} ] が指定されました"
+                        )));
+                    }
                     let mut values = [0; 5];
-                    for index in 0..count as usize { values[index] = self.read_int(pointer.wrapping_add(index as u32 * 4), 2)? as i32; }
+                    for index in 0..count as usize {
+                        values[index] =
+                            self.read_int(pointer.wrapping_add(index as u32 * 4), 2)? as i32;
+                    }
                     api.register_named_font_transform(&name, values)?;
                     Value::None
-                } else if (code, id) == (0x92, 0x0f) && self.native_abi_profile == NativeAbiProfile::Modern {
+                } else if (code, id) == (0x92, 0x0f)
+                    && self.native_abi_profile == NativeAbiProfile::Modern
+                {
                     let tracking = self.pop_int()?;
                     let name = self.pop_string_lossy()?;
                     api.set_named_font_tracking(&name, tracking)?;
                     Value::None
-                } else if (code, id) == (0x92, 0x95) && matches!(self.native_abi_profile, NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern) {
+                } else if (code, id) == (0x92, 0x95)
+                    && matches!(
+                        self.native_abi_profile,
+                        NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern
+                    )
+                {
                     let window = self.pop_int()?;
-                    let value = api.window_last_text_extent(window).ok_or_else(|| VmError::Runtime("無効なウィンドウハンドルが指定されました".into()))?;
+                    let value = api.window_last_text_extent(window).ok_or_else(|| {
+                        VmError::Runtime("無効なウィンドウハンドルが指定されました".into())
+                    })?;
                     Value::Int(value)
                 } else if self.native_abi_profile != NativeAbiProfile::Tayutama
                     && (code, id) == (0x91, 0x09)
@@ -4421,12 +4556,18 @@ impl Vm {
                     let mode = self.pop_int()?;
                     let valid = (0..=1).contains(&mode);
                     if valid {
-                        self.system81_shared.lock().expect("system81 state poisoned")
+                        self.system81_shared
+                            .lock()
+                            .expect("system81 state poisoned")
                             .graph91_resource_mode = mode;
                     }
                     Value::Int(i32::from(valid))
-                } else if matches!(self.native_abi_profile, NativeAbiProfile::Amachoco | NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern)
-                    && (code, id) == (0x92, 0x99)
+                } else if matches!(
+                    self.native_abi_profile,
+                    NativeAbiProfile::Amachoco
+                        | NativeAbiProfile::HoukagoFd
+                        | NativeAbiProfile::Modern
+                ) && (code, id) == (0x92, 0x99)
                 {
                     self.handle_character_widths_call(api)?
                 } else if (code, id) == (0x90, 0xa1) {
@@ -4458,27 +4599,46 @@ impl Vm {
                         ));
                     }
                     Value::None
-                } else if (code,id)==(0x90,0x78) {
-                    let pointer=self.pop_ptr()?;
-                    let height=self.pop_int()? as u32;
-                    let width=self.pop_int()? as u32;
-                    let object=self.pop_int()?;
-                    let count=width.checked_mul(height).filter(|n|*n!=0).ok_or_else(||VmError::Runtime("90:78: invalid tile table dimensions".into()))?;
-                    let bytes=count.checked_mul(2).ok_or_else(||VmError::Runtime("90:78: tile table size overflow".into()))?;
+                } else if (code, id) == (0x90, 0x78) {
+                    let pointer = self.pop_ptr()?;
+                    let height = self.pop_int()? as u32;
+                    let width = self.pop_int()? as u32;
+                    let object = self.pop_int()?;
+                    let count = width
+                        .checked_mul(height)
+                        .filter(|n| *n != 0)
+                        .ok_or_else(|| {
+                            VmError::Runtime("90:78: invalid tile table dimensions".into())
+                        })?;
+                    let bytes = count.checked_mul(2).ok_or_else(|| {
+                        VmError::Runtime("90:78: tile table size overflow".into())
+                    })?;
                     // Validate the entire range before allocating a host vector.
-                    self.resolve_range(pointer,bytes as usize)?;
-                    let mut tiles=Vec::with_capacity(count as usize);
-                    for i in 0..count {tiles.push(self.read_int(pointer.wrapping_add(i*2),1)? as u16);}
-                    if !api.upload_map_tile_data(object,width,height,&tiles){return Err(VmError::Runtime("90:78: invalid map or tile dimensions".into()));}
+                    self.resolve_range(pointer, bytes as usize)?;
+                    let mut tiles = Vec::with_capacity(count as usize);
+                    for i in 0..count {
+                        tiles.push(self.read_int(pointer.wrapping_add(i * 2), 1)? as u16);
+                    }
+                    if !api.upload_map_tile_data(object, width, height, &tiles) {
+                        return Err(VmError::Runtime(
+                            "90:78: invalid map or tile dimensions".into(),
+                        ));
+                    }
                     Value::None
-                } else if (code,id)==(0x90,0x44) {
-                    let alpha=self.pop_int()?;
-                    let table=self.pop_ptr()?;
-                    let count=self.pop_int()?;
-                    if !(2..=32).contains(&count) {return Err(VmError::Runtime(format!("Graph90:44 invalid frame count {count}")));}
-                    let mut frames=Vec::with_capacity(count as usize);
-                    for index in 0..count {frames.push(self.read_int(table.wrapping_add(index as u32*4),2)? as i32);}
-                    api.configure_background_frames(&frames,alpha)?;
+                } else if (code, id) == (0x90, 0x44) {
+                    let alpha = self.pop_int()?;
+                    let table = self.pop_ptr()?;
+                    let count = self.pop_int()?;
+                    if !(2..=32).contains(&count) {
+                        return Err(VmError::Runtime(format!(
+                            "Graph90:44 invalid frame count {count}"
+                        )));
+                    }
+                    let mut frames = Vec::with_capacity(count as usize);
+                    for index in 0..count {
+                        frames.push(self.read_int(table.wrapping_add(index as u32 * 4), 2)? as i32);
+                    }
+                    api.configure_background_frames(&frames, alpha)?;
                     Value::None
                 } else if code == 0x90 && matches!(id, 0xA0 | 0xA2 | 0xA3 | 0xB0 | 0xB1) {
                     let opcode = NativeOpcode { group: code, id };
@@ -4487,15 +4647,23 @@ impl Vm {
                     let window = request.window;
                     let selection_id = api.start_native_selection(request)?;
                     let class_name = match id {
-                        0xA0 => "CProcSelectItem", 0xA2 => "CProcSelectItemEx",
-                        0xA3 => "CProcSelectItemExBlink", 0xB0 => "CProcSelectIcon",
+                        0xA0 => "CProcSelectItem",
+                        0xA2 => "CProcSelectItemEx",
+                        0xA3 => "CProcSelectItemExBlink",
+                        0xB0 => "CProcSelectIcon",
                         _ => "CProcSelectIconEx",
                     };
-                    self.install_cprocedure(InstalledCProcedure::graph(
-                        self.thread.thread_id(), opcode, class_name,
-                        native_thread::NativeGraphProcedureMode::Select,
-                        Some(window), Some(selection_id),
-                    ), trace_events);
+                    self.install_cprocedure(
+                        InstalledCProcedure::graph(
+                            self.thread.thread_id(),
+                            opcode,
+                            class_name,
+                            native_thread::NativeGraphProcedureMode::Select,
+                            Some(window),
+                            Some(selection_id),
+                        ),
+                        trace_events,
+                    );
                     Value::None
                 } else if (code, id) == (0x90, 0xbc) {
                     let object = self.pop_value()?;
@@ -4510,11 +4678,29 @@ impl Vm {
                                 value as u32,
                             )?;
                         }
-                        if self.native_abi_profile==NativeAbiProfile::Amachoco && api.input_gate_diagnostics_enabled() && state_buffer==(FRAME_SEGMENT|self.mem_ptr.wrapping_sub(0x64)) {
-                            let base=FRAME_SEGMENT|self.mem_ptr;
-                            let read=|offset:u32|self.read_int(base.wrapping_sub(offset),2).unwrap_or(u32::MAX);
-                            let event=read(0x70);
-                            if event!=0 {api.record_input_gate([self.pc as u32,self.mem_ptr,event,read(0x6c),read(0x68),read(0x44),read(0x40),state[0]as u32,self.read_int(1092,2).unwrap_or(u32::MAX)]);}
+                        if self.native_abi_profile == NativeAbiProfile::Amachoco
+                            && api.input_gate_diagnostics_enabled()
+                            && state_buffer == (FRAME_SEGMENT | self.mem_ptr.wrapping_sub(0x64))
+                        {
+                            let base = FRAME_SEGMENT | self.mem_ptr;
+                            let read = |offset: u32| {
+                                self.read_int(base.wrapping_sub(offset), 2)
+                                    .unwrap_or(u32::MAX)
+                            };
+                            let event = read(0x70);
+                            if event != 0 {
+                                api.record_input_gate([
+                                    self.pc as u32,
+                                    self.mem_ptr,
+                                    event,
+                                    read(0x6c),
+                                    read(0x68),
+                                    read(0x44),
+                                    read(0x40),
+                                    state[0] as u32,
+                                    self.read_int(1092, 2).unwrap_or(u32::MAX),
+                                ]);
+                            }
                         }
                     }
                     Value::Int(i32::from(exists))
@@ -4693,12 +4879,16 @@ impl Vm {
                                     "指定されたビットマップ [ {bitmap} ] はピクセル数が多過ぎます"
                                 ),
                                 0x8000_0008 => "必要なメモリが確保できませんでした".to_string(),
-                                0x8000_000A => format!("指定されたビットマップ [ {bitmap} ] は無効です"),
+                                0x8000_000A => {
+                                    format!("指定されたビットマップ [ {bitmap} ] は無効です")
+                                }
                                 0x8000_0011 => format!(
                                     "指定されたビットマップ [ {bitmap} ] のピクセルモードはサポートされていません"
                                 ),
                                 0x8000_0017 => format!("無効な形式 [ {format} ] が指定されました"),
-                                0x8000_0018 => format!("無効なパラメータ [ {format} ] が指定されました"),
+                                0x8000_0018 => {
+                                    format!("無効なパラメータ [ {format} ] が指定されました")
+                                }
                                 0xFFFF_FFFE => "エンコードに失敗しました".to_string(),
                                 _ => "想定外のエラーが発生しました".to_string(),
                             };
@@ -4777,8 +4967,8 @@ impl Vm {
                     let part_count = self.pop_int()?.max(0);
                     let bitmap = self.pop_int()?;
                     let landscape = self.pop_int()?;
-                    self.resolve_range(parts_ptr,part_count as usize*20)?;
-                    self.resolve_range(columns_ptr,column_count as usize*136)?;
+                    self.resolve_range(parts_ptr, part_count as usize * 20)?;
+                    self.resolve_range(columns_ptr, column_count as usize * 136)?;
                     let mut part_words = Vec::with_capacity(part_count as usize * 5);
                     for index in 0..part_count as usize * 5 {
                         part_words.push(
@@ -4811,7 +5001,7 @@ impl Vm {
                     } else {
                         0
                     };
-                    self.resolve_range(map_ptr,count*4)?;
+                    self.resolve_range(map_ptr, count * 4)?;
                     let mut map = Vec::with_capacity(count);
                     for index in 0..count {
                         map.push(self.read_int(map_ptr.wrapping_add((index * 4) as u32), 2)? as i32);
@@ -4823,7 +5013,7 @@ impl Vm {
                     let guide_count = self.pop_int()?.max(0);
                     let bitmap = self.pop_int()?;
                     let landscape = self.pop_int()?;
-                    self.resolve_range(guides_ptr,guide_count as usize*20)?;
+                    self.resolve_range(guides_ptr, guide_count as usize * 20)?;
                     let mut words = Vec::with_capacity(guide_count as usize * 5);
                     for index in 0..guide_count as usize * 5 {
                         words.push(
@@ -4839,7 +5029,7 @@ impl Vm {
                     let pairs_ptr = self.pop_ptr()?;
                     let point_count = self.pop_int()?.max(0);
                     let landscape = self.pop_int()?;
-                    self.resolve_range(pairs_ptr,point_count as usize*8)?;
+                    self.resolve_range(pairs_ptr, point_count as usize * 8)?;
                     let mut pairs = Vec::with_capacity(point_count as usize * 2);
                     for index in 0..point_count as usize * 2 {
                         pairs.push(
@@ -5731,7 +5921,9 @@ impl Vm {
                     self.push_value(result);
                 }
             }
-            BpOpcode::Known { code: 0xb0 | 0xc0, .. } => {
+            BpOpcode::Known {
+                code: 0xb0 | 0xc0, ..
+            } => {
                 let id = instruction.raw.get(1).copied().unwrap_or_default() as u16;
                 self.note_call("user", code, id);
                 api.observe_dispatch(NativeOpcode { group: code, id });
@@ -5745,13 +5937,16 @@ impl Vm {
                 }
                 let vm_owned_extension = self.native_abi_profile == NativeAbiProfile::Anipani
                     && matches!((code, id), (0xb0, 0xc5 | 0xc6));
-                if api.host_requests_enabled() && !vm_owned_extension
+                if api.host_requests_enabled()
+                    && !vm_owned_extension
                     && self.intercept_native_host_request(api, NativeOpcode { group: code, id })?
                 {
                     self.pc = next_pc;
                     return Ok(());
                 }
-                if !(self.native_abi_profile == NativeAbiProfile::Anipani && (code, id) == (0xb0, 0xc6)) {
+                if !(self.native_abi_profile == NativeAbiProfile::Anipani
+                    && (code, id) == (0xb0, 0xc6))
+                {
                     self.normalize_user_string_args(code, id)?;
                 }
                 let direct_result = if self.native_abi_profile == NativeAbiProfile::Anipani
@@ -5759,35 +5954,46 @@ impl Vm {
                 {
                     let charset = if id == 0xc5 { self.pop_int()? } else { 128 };
                     let destination = self.pop_ptr()?;
-                    let records = api.user_font_catalog().into_iter().map(|font| {
-                        font_catalog::NativeFontFamily {
+                    let records = api
+                        .user_font_catalog()
+                        .into_iter()
+                        .map(|font| font_catalog::NativeFontFamily {
                             name: self.encode_native_string(&font.name).into_owned(),
                             charsets: font.charsets,
-                        }
-                    }).collect::<Vec<_>>();
+                        })
+                        .collect::<Vec<_>>();
                     let (bytes, count) = font_catalog::serialize_native_records(&records, charset);
-                    let result = if destination == 0 { bytes.len() } else {
+                    let result = if destination == 0 {
+                        bytes.len()
+                    } else {
                         let range = self.resolve_write_range(destination, bytes.len())?;
                         self.memory[range].copy_from_slice(&bytes);
                         self.clear_shadow_values(destination, bytes.len());
                         count
                     };
                     Some(Value::Int(result as i32))
-                } else if self.native_abi_profile == NativeAbiProfile::Anipani && (code, id) == (0xb0, 0xc6) {
+                } else if self.native_abi_profile == NativeAbiProfile::Anipani
+                    && (code, id) == (0xb0, 0xc6)
+                {
                     let name = self.pop_value()?;
                     let destination = self.pop_ptr()?;
                     let name = self.native_auto_string(name)?.to_lowercase();
                     let catalog = api.user_font_catalog();
                     let matched = [128, 136, 134, 0].iter().find_map(|charset| {
-                        catalog.iter().find(|font| font.charsets.contains(charset)
-                            && font.name.to_lowercase() == name)
+                        catalog.iter().find(|font| {
+                            font.charsets.contains(charset) && font.name.to_lowercase() == name
+                        })
                     });
                     let result = if let Some(font) = matched {
-                        if destination == 0 { return Err(VmError::Runtime("font pitch output is null".into())); }
+                        if destination == 0 {
+                            return Err(VmError::Runtime("font pitch output is null".into()));
+                        }
                         self.write_int(destination, 2, u32::from(font.pitch_and_family & 3))?;
                         self.clear_shadow_values(destination, 4);
                         1
-                    } else { 0 };
+                    } else {
+                        0
+                    };
                     Some(Value::Int(result))
                 } else if (code, id) == (0xb0, 0xc4) {
                     // sub_479D60 -> sub_4694B0 -> sub_42DEB0/sub_42F030:
@@ -5816,9 +6022,8 @@ impl Vm {
                     let bytes_written = self.write_c_string_bounded(destination, &text, 255)?;
                     Some(Value::Int(bytes_written as i32))
                 } else if user_dialog::is_user_dialog(code, id) {
-                    let (request, sink) = self
-                        .parse_user_dialog(id)?
-                        .expect("user dialog selector");
+                    let (request, sink) =
+                        self.parse_user_dialog(id)?.expect("user dialog selector");
                     if self.begin_host_continuation(
                         api,
                         HostRequest::UserDialog(request.clone()),
@@ -5887,7 +6092,11 @@ impl Vm {
                     let count = self.pop_int()?;
                     let handle = self.pop_int()?;
                     let layers = count;
-                    let count = if (1..=16).contains(&count) { count as usize } else { 0 };
+                    let count = if (1..=16).contains(&count) {
+                        count as usize
+                    } else {
+                        0
+                    };
                     let (first, second) = if count == 0 {
                         (Vec::new(), Vec::new())
                     } else if count == 1 && first_source == 0 {
@@ -5902,7 +6111,7 @@ impl Vm {
                             } else {
                                 self.read_int(first_source.wrapping_add(offset), 2)? as i32
                             });
-                            second.push(if count==1 || second_source == 0 {
+                            second.push(if count == 1 || second_source == 0 {
                                 0
                             } else {
                                 self.read_int(second_source.wrapping_add(offset), 2)? as i32
@@ -5938,11 +6147,13 @@ impl Vm {
                     let count = if id == 0x25 { 11 } else { 18 };
                     let pointer_index = if id == 0x25 { 10 } else { 14 };
                     let mut args = Vec::with_capacity(count);
-                    for _ in 0..count { args.push(self.pop_value()?); }
+                    for _ in 0..count {
+                        args.push(self.pop_value()?);
+                    }
                     args.reverse();
                     let pointer = args[pointer_index].as_i32() as u32;
                     args[pointer_index] = Value::Int(self.read_int(pointer, 2)? as i32);
-                    let mut call = NativeCallFrame::new(NativeOpcode {group: code, id}, args);
+                    let mut call = NativeCallFrame::new(NativeOpcode { group: code, id }, args);
                     Some(api.call_user(&mut call)?.unwrap_or(Value::None))
                 } else if (code, id) == (0xc0, 0xc2) {
                     // sub_4777B0 -> sub_495550: [handle, point_count,
@@ -6689,12 +6900,23 @@ impl Vm {
                 match procedure.mode {
                     native_thread::NativeGraphProcedureMode::Select => {
                         if let Some(selection_id) = procedure.control_id {
-                            let callbacks = callbacks.iter().map(|v| [v[0].as_i32(), v[1].as_i32()]).collect::<Vec<_>>();
+                            let callbacks = callbacks
+                                .iter()
+                                .map(|v| [v[0].as_i32(), v[1].as_i32()])
+                                .collect::<Vec<_>>();
                             // 512 is an Icon-only forced-selection callback,
                             // not a base cancellation. Item procedures ignore it.
-                            let completion = api.poll_native_selection(selection_id, &callbacks, !self.procedure_alive(terminal));
-                            let Some(completion) = completion else { return Some(VmStopReason::WaitingForProcedure); };
-                            for value in &completion.values[..completion.count] { self.push_value(Value::Int(*value)); }
+                            let completion = api.poll_native_selection(
+                                selection_id,
+                                &callbacks,
+                                !self.procedure_alive(terminal),
+                            );
+                            let Some(completion) = completion else {
+                                return Some(VmStopReason::WaitingForProcedure);
+                            };
+                            for value in &completion.values[..completion.count] {
+                                self.push_value(Value::Int(*value));
+                            }
                             self.thread.clear_current_procedure();
                             return None;
                         }
@@ -6879,46 +7101,100 @@ impl Vm {
     }
     pub fn set_unicode_glyph_bridge(&mut self, enabled: bool) {
         self.unicode_glyph_bridge = enabled;
-        for task in &mut self.async_tasks { task.vm.set_unicode_glyph_bridge(enabled); }
+        for task in &mut self.async_tasks {
+            task.vm.set_unicode_glyph_bridge(enabled);
+        }
     }
 
     fn native_glyph_registration_code(&self, code: i32) -> i32 {
         if self.unicode_glyph_bridge && self.native_utf8_enabled() {
             code | i32::MIN
-        } else { code }
+        } else {
+            code
+        }
     }
 
-    fn bp_frame_tag(&self) -> u32 { if self.modern_pointer_tags { 0x2000_0000 } else { FRAME_SEGMENT } }
-    fn bp_code_tag(&self) -> u32 { if self.modern_pointer_tags { 0x1000_0000 } else { CODE_SEGMENT } }
+    fn bp_frame_tag(&self) -> u32 {
+        if self.modern_pointer_tags {
+            0x2000_0000
+        } else {
+            FRAME_SEGMENT
+        }
+    }
+    fn bp_code_tag(&self) -> u32 {
+        if self.modern_pointer_tags {
+            0x1000_0000
+        } else {
+            CODE_SEGMENT
+        }
+    }
 
-    pub fn set_native_abi_profile(&mut self,profile:NativeAbiProfile) {
-        self.native_abi_profile=profile;
-        for task in &mut self.async_tasks {task.vm.set_native_abi_profile(profile);}
+    pub fn set_native_abi_profile(&mut self, profile: NativeAbiProfile) {
+        self.native_abi_profile = profile;
+        for task in &mut self.async_tasks {
+            task.vm.set_native_abi_profile(profile);
+        }
     }
-    pub fn native_abi_profile(&self)->NativeAbiProfile {self.native_abi_profile}
-    fn effective_arg_count(&self,group:u8,id:u16)->Option<usize> {
-        native_abi::lookup_profile(self.native_abi_profile,group,id).map(|a|a.argc).or_else(||known_call_arg_count(group,id))
+    pub fn native_abi_profile(&self) -> NativeAbiProfile {
+        self.native_abi_profile
     }
-    fn effective_output_count(&self,group:u8,id:u16)->usize {
-        native_abi::lookup_profile(self.native_abi_profile,group,id).map(|a|a.stack_outputs).unwrap_or_else(||known_call_stack_output_count(group,id))
+    fn effective_arg_count(&self, group: u8, id: u16) -> Option<usize> {
+        native_abi::lookup_profile(self.native_abi_profile, group, id)
+            .map(|a| a.argc)
+            .or_else(|| known_call_arg_count(group, id))
     }
-    fn effective_procedure(&self,group:u8,id:u16)->bool {
-        native_abi::lookup_profile(self.native_abi_profile,group,id).map(|a|a.installs_procedure).unwrap_or_else(||native_abi::installs_procedure(group,id))
+    fn effective_output_count(&self, group: u8, id: u16) -> usize {
+        native_abi::lookup_profile(self.native_abi_profile, group, id)
+            .map(|a| a.stack_outputs)
+            .unwrap_or_else(|| known_call_stack_output_count(group, id))
     }
-    fn effective_strict_support(&self,opcode:NativeOpcode)->bool {
+    fn effective_procedure(&self, group: u8, id: u16) -> bool {
+        native_abi::lookup_profile(self.native_abi_profile, group, id)
+            .map(|a| a.installs_procedure)
+            .unwrap_or_else(|| native_abi::installs_procedure(group, id))
+    }
+    fn effective_strict_support(&self, opcode: NativeOpcode) -> bool {
         if self.native_abi_profile == NativeAbiProfile::Amachoco
-            && matches!((opcode.group, opcode.id), (0x81, 0x00) | (0x91, 0x09) | (0x92, 0x99))
-        { return true; }
-        if self.native_abi_profile==NativeAbiProfile::Amachoco && opcode.group==0x81 && matches!(opcode.id,0x21|0xD8|0xDA) {return true;}
+            && matches!(
+                (opcode.group, opcode.id),
+                (0x81, 0x00) | (0x91, 0x09) | (0x92, 0x99)
+            )
+        {
+            return true;
+        }
+        if self.native_abi_profile == NativeAbiProfile::Amachoco
+            && opcode.group == 0x81
+            && matches!(opcode.id, 0x21 | 0xD8 | 0xDA)
+        {
+            return true;
+        }
         if self.native_abi_profile == NativeAbiProfile::Anipani
-            && (matches!((opcode.group, opcode.id), (0x81, 0x00 | 0x21 | 0x27 | 0xd8 | 0xda))
-                || (opcode.group == 0x91 && matches!(opcode.id, 0x00 | 0x09 | 0x0a))) { return true; }
-        if matches!(self.native_abi_profile, NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern)
-            && matches!((opcode.group, opcode.id), (0x81, 0x00..=0x03) | (0x91, 0x05 | 0x09..=0x0a) | (0x92, 0x0e | 0x95 | 0x99))
-        { return true; }
+            && (matches!(
+                (opcode.group, opcode.id),
+                (0x81, 0x00 | 0x21 | 0x27 | 0xd8 | 0xda)
+            ) || (opcode.group == 0x91 && matches!(opcode.id, 0x00 | 0x09 | 0x0a)))
+        {
+            return true;
+        }
+        if matches!(
+            self.native_abi_profile,
+            NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern
+        ) && matches!(
+            (opcode.group, opcode.id),
+            (0x81, 0x00..=0x03) | (0x91, 0x05 | 0x09..=0x0a) | (0x92, 0x0e | 0x95 | 0x99)
+        ) {
+            return true;
+        }
         if self.native_abi_profile == NativeAbiProfile::Modern
-            && (opcode.group, opcode.id) == (0x92, 0x0f) { return true; }
-        if self.native_abi_profile == NativeAbiProfile::Anipani && (opcode.group, opcode.id) == (0xb0, 0xc5) { return true; }
+            && (opcode.group, opcode.id) == (0x92, 0x0f)
+        {
+            return true;
+        }
+        if self.native_abi_profile == NativeAbiProfile::Anipani
+            && (opcode.group, opcode.id) == (0xb0, 0xc5)
+        {
+            return true;
+        }
         native_call::is_strictly_supported(opcode)
     }
 
@@ -7013,8 +7289,8 @@ impl Vm {
         fail_on_stub: bool,
     ) -> VmResult<()> {
         if !native_return_audit_enabled()
-            || self.effective_output_count(group,id)==0
-            || self.effective_procedure(group,id)
+            || self.effective_output_count(group, id) == 0
+            || self.effective_procedure(group, id)
             || *result != Value::None
         {
             return Ok(());
@@ -7169,18 +7445,32 @@ impl Vm {
         let Some(program) = self.programs.get(program_index) else {
             return parser_offset;
         };
-        let base = self.program_code_bases.get(program_index).copied().unwrap_or_default();
+        let base = self
+            .program_code_bases
+            .get(program_index)
+            .copied()
+            .unwrap_or_default();
         base.wrapping_add(parser_offset.wrapping_sub(Self::program_parser_code_start(program)))
     }
 
     /// A code-region offset back to (module, parser offset): the newest
     /// module covering it, else `program_index`.
     fn resolve_code_target(&self, program_index: usize, code_offset: u32) -> (usize, u32) {
-        self.resolve_target_code_offset(code_offset).unwrap_or_else(|| {
-            let program = &self.programs[program_index];
-            let base = self.program_code_bases.get(program_index).copied().unwrap_or_default();
-            (program_index, code_offset.wrapping_sub(base).wrapping_add(Self::program_parser_code_start(program)))
-        })
+        self.resolve_target_code_offset(code_offset)
+            .unwrap_or_else(|| {
+                let program = &self.programs[program_index];
+                let base = self
+                    .program_code_bases
+                    .get(program_index)
+                    .copied()
+                    .unwrap_or_default();
+                (
+                    program_index,
+                    code_offset
+                        .wrapping_sub(base)
+                        .wrapping_add(Self::program_parser_code_start(program)),
+                )
+            })
     }
 
     fn resolve_indirect_call_target(
@@ -7206,12 +7496,18 @@ impl Vm {
     /// region (segment 1).
     fn install_module_code(&mut self, base: u32, code: &[u8]) {
         let start = (LOCAL_MEMORY_BASE + CODE_WINDOW_OFFSET) as usize + base as usize;
-        let end = (start + code.len()).min((LOCAL_MEMORY_BASE + CODE_WINDOW_OFFSET + CODE_WINDOW_SIZE) as usize);
+        let end = (start + code.len())
+            .min((LOCAL_MEMORY_BASE + CODE_WINDOW_OFFSET + CODE_WINDOW_SIZE) as usize);
         if start >= end {
             return;
         }
         if self.memory.len() < end {
-            self.memory.resize(end.next_power_of_two().max(INITIAL_MEMORY_SIZE).min(MAX_MEMORY_SIZE), 0);
+            self.memory.resize(
+                end.next_power_of_two()
+                    .max(INITIAL_MEMORY_SIZE)
+                    .min(MAX_MEMORY_SIZE),
+                0,
+            );
         }
         self.memory[start..end].copy_from_slice(&code[..end - start]);
     }
@@ -7356,25 +7652,24 @@ impl Vm {
     }
 
     fn program_index_for_program_value(&self, value: &Value) -> Option<usize> {
-        let program = match value {
-            Value::Program(program) => Some(program.as_ref()),
-            Value::Ptr(ptr) => self
-                .mem_values
-                .get(&self.value_key(*ptr))
-                .and_then(|value| match value {
-                    Value::Program(program) => Some(program.as_ref()),
-                    _ => None,
-                }),
-            Value::Int(ptr) => {
-                self.mem_values
-                    .get(&self.value_key(*ptr as u32))
+        let program =
+            match value {
+                Value::Program(program) => Some(program.as_ref()),
+                Value::Ptr(ptr) => self
+                    .mem_values
+                    .get(&self.value_key(*ptr))
                     .and_then(|value| match value {
                         Value::Program(program) => Some(program.as_ref()),
                         _ => None,
-                    })
-            }
-            Value::Str(_) | Value::Func { .. } | Value::None => None,
-        }?;
+                    }),
+                Value::Int(ptr) => self.mem_values.get(&self.value_key(*ptr as u32)).and_then(
+                    |value| match value {
+                        Value::Program(program) => Some(program.as_ref()),
+                        _ => None,
+                    },
+                ),
+                Value::Str(_) | Value::Func { .. } | Value::None => None,
+            }?;
 
         if let Some(name) = program.script_name.as_ref() {
             if let Some(index) = self.program_cache.get(name).copied() {
@@ -7504,7 +7799,10 @@ impl Vm {
                 {
                     // The record lives in a heap block: hand back its
                     // script address.
-                    if let Some(ptr) = self.target_heap.address_of(addr - LOCAL_MEMORY_BASE, &self.heap_allocations) {
+                    if let Some(ptr) = self
+                        .target_heap
+                        .address_of(addr - LOCAL_MEMORY_BASE, &self.heap_allocations)
+                    {
                         return Ok(ptr as i32);
                     }
                 }
@@ -7528,7 +7826,9 @@ impl Vm {
 
     /// sub_48E8C0's fatal error for an address no segment maps.
     fn invalid_pointer(ptr: u32) -> VmError {
-        VmError::Runtime(format!("無効なポインタ [ ${ptr:08X} ] にアクセスしようとしました"))
+        VmError::Runtime(format!(
+            "無効なポインタ [ ${ptr:08X} ] にアクセスしようとしました"
+        ))
     }
 
     /// Validate the complete local span, not only its first byte. A store
@@ -7538,10 +7838,19 @@ impl Vm {
             Some((ptr >> 28, ptr & 0x0fff_ffff))
         } else if matches!(ptr >> 26, 1 | 2) {
             Some((ptr >> 26, ptr & 0x03ff_ffff))
-        } else { None };
+        } else {
+            None
+        };
         if let Some((segment, offset)) = region {
-            let limit = if segment == 1 { CODE_WINDOW_SIZE } else { CODE_WINDOW_OFFSET };
-            if (offset as usize).checked_add(size).is_none_or(|end| end > limit as usize) {
+            let limit = if segment == 1 {
+                CODE_WINDOW_SIZE
+            } else {
+                CODE_WINDOW_OFFSET
+            };
+            if (offset as usize)
+                .checked_add(size)
+                .is_none_or(|end| end > limit as usize)
+            {
                 return Err(Self::invalid_pointer(ptr));
             }
         }
@@ -7654,9 +7963,19 @@ impl Vm {
                 .programs
                 .get(program)
                 .and_then(|module| module.instructions.get(pc))
-                .map_or(0, |instruction| self.code_offset_of(program, instruction.offset as u32));
-            let base = self.program_code_bases.get(program).copied().unwrap_or_default();
-            message.push_str(&format!("( {} - ${:08X} )\n", self.program_name(program), offset.wrapping_sub(base)));
+                .map_or(0, |instruction| {
+                    self.code_offset_of(program, instruction.offset as u32)
+                });
+            let base = self
+                .program_code_bases
+                .get(program)
+                .copied()
+                .unwrap_or_default();
+            message.push_str(&format!(
+                "( {} - ${:08X} )\n",
+                self.program_name(program),
+                offset.wrapping_sub(base)
+            ));
         }
         if !frames.is_empty() {
             message.push('\n');
@@ -7668,13 +7987,19 @@ impl Vm {
             .unwrap_or_else(|| self.resource_primary_root(api));
         let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(&message);
         api.write_file_bytes(&format!("{root}BGIError.txt"), &bytes);
-        let mut shared = self.system81_shared.lock().expect("system81 state poisoned");
+        let mut shared = self
+            .system81_shared
+            .lock()
+            .expect("system81 state poisoned");
         if shared.captured_error.is_none() {
             let capture = shared.error_capture_mode != 0;
             drop(shared);
             api.message_box("", &message);
             if capture {
-                self.system81_shared.lock().expect("system81 state poisoned").captured_error = Some(message);
+                self.system81_shared
+                    .lock()
+                    .expect("system81 state poisoned")
+                    .captured_error = Some(message);
             }
         }
     }
@@ -7840,7 +8165,8 @@ impl Vm {
             // sub_44A900 projects the 64-byte extended source group into the
             // common 52-byte runtime group: source +0x14/+0x18/+0x1C/+0x20
             // become internal +0x0C/+0x10/+0x14/+0x18 respectively.
-            descriptor.groups.push(GraphInputGroup { navigation_columns: self.read_int(group_ptr.wrapping_add(4),2)? as i32,
+            descriptor.groups.push(GraphInputGroup {
+                navigation_columns: self.read_int(group_ptr.wrapping_add(4), 2)? as i32,
                 index: group as i32,
                 initial_current_item: selected_index,
                 selection_enabled: self.read_int(group_ptr.wrapping_add(20), 2)? != 0,
@@ -7998,7 +8324,8 @@ impl Vm {
                 (self.read_int(group_ptr, 2)? & 0xffff).min(MAX_REGIONS_PER_GROUP as u32) as usize;
             let regions_ptr = self.read_pointer_field(group_ptr.wrapping_add(4))?;
             let selected_index = self.read_int(group_ptr.wrapping_add(8), 2)? as i32;
-            descriptor.groups.push(GraphInputGroup { navigation_columns: (self.read_int(group_ptr,2)?>>16) as i32,
+            descriptor.groups.push(GraphInputGroup {
+                navigation_columns: (self.read_int(group_ptr, 2)? >> 16) as i32,
                 index: group as i32,
                 initial_current_item: selected_index,
                 selection_enabled: self.read_int(group_ptr.wrapping_add(12), 2)? != 0,
@@ -8122,7 +8449,8 @@ impl Vm {
         }
         let mut index = 0;
         while index < text.len() {
-            let double = is_sjis_lead_byte(text[index]) && text.get(index + 1).is_some_and(|&b| b != 0);
+            let double =
+                is_sjis_lead_byte(text[index]) && text.get(index + 1).is_some_and(|&b| b != 0);
             width = width
                 .wrapping_add(if double { cell } else { cell / 2 })
                 .wrapping_add(spacing);
@@ -8132,7 +8460,10 @@ impl Vm {
         Ok(Value::Int(0))
     }
 
-    fn handle_character_widths_call<A: GraphApi + ?Sized>(&mut self, api: &mut A) -> VmResult<Value> {
+    fn handle_character_widths_call<A: GraphApi + ?Sized>(
+        &mut self,
+        api: &mut A,
+    ) -> VmResult<Value> {
         // amachoco.exe sub_490540 -> sub_4041C0: optional ABC-width array,
         // optional UTF-16 character count, text, font, size, width%, style.
         let _style = self.pop_int()?;
@@ -8465,7 +8796,9 @@ impl Vm {
         // synthetic String shadow; preserve the actual native bytes rather
         // than reinterpret valid UTF-8 as legacy CP932/graph GBK mojibake.
         if self.native_utf8_enabled() {
-            if let Ok(text)=std::str::from_utf8(&bytes) {return Ok(text.to_owned());}
+            if let Ok(text) = std::str::from_utf8(&bytes) {
+                return Ok(text.to_owned());
+            }
         }
         let bytes = if encoding == encoding_rs::SHIFT_JIS {
             engine_shift_jis_bytes(&bytes)
@@ -8578,7 +8911,11 @@ impl Vm {
     }
 
     fn write_c_string_raw(&mut self, ptr: u32, text: &str) -> VmResult<()> {
-        let encoded=if self.native_utf8_enabled() {std::borrow::Cow::Borrowed(text.as_bytes())} else {encoding_rs::SHIFT_JIS.encode(text).0};
+        let encoded = if self.native_utf8_enabled() {
+            std::borrow::Cow::Borrowed(text.as_bytes())
+        } else {
+            encoding_rs::SHIFT_JIS.encode(text).0
+        };
         let bytes = encoded.as_ref();
         let range = self.resolve_write_range(ptr, bytes.len().saturating_add(1))?;
         let start = range.start;
@@ -8587,8 +8924,12 @@ impl Vm {
         self.trace_watch_write(ptr, bytes.len().saturating_add(1), 0, "write_c_string");
         Ok(())
     }
-    fn encode_native_string<'a>(&self,text:&'a str)->std::borrow::Cow<'a,[u8]> {
-        if self.native_utf8_enabled() {std::borrow::Cow::Borrowed(text.as_bytes())} else {encoding_rs::SHIFT_JIS.encode(text).0}
+    fn encode_native_string<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, [u8]> {
+        if self.native_utf8_enabled() {
+            std::borrow::Cow::Borrowed(text.as_bytes())
+        } else {
+            encoding_rs::SHIFT_JIS.encode(text).0
+        }
     }
     fn decode_native_string_lossy(&self, bytes: &[u8]) -> String {
         if self.native_utf8_enabled() {
@@ -8807,7 +9148,11 @@ impl Vm {
             }
             written += bytes.len();
         }
-        let result = if destination == 0 { written } else { names.len() };
+        let result = if destination == 0 {
+            written
+        } else {
+            names.len()
+        };
         Ok(Value::Int(result.min(i32::MAX as usize) as i32))
     }
 
@@ -9072,7 +9417,9 @@ impl Vm {
         ];
         for ((text, limit), message) in fields.into_iter().zip(messages) {
             if encoding_rs::SHIFT_JIS.encode(text).0.len() >= limit {
-                return Err(VmError::Runtime(message.replace("{}", &(limit - 1).to_string())));
+                return Err(VmError::Runtime(
+                    message.replace("{}", &(limit - 1).to_string()),
+                ));
             }
         }
         Ok(())
@@ -9242,7 +9589,12 @@ impl Vm {
             }
         };
         loop {
-            if api.launch_process(&current_directory, &command_line, hide_window, wait_for_uninstaller) {
+            if api.launch_process(
+                &current_directory,
+                &command_line,
+                hide_window,
+                wait_for_uninstaller,
+            ) {
                 return 1;
             }
             let Some(message) = error_message.as_deref() else {
@@ -9261,7 +9613,9 @@ impl Vm {
     /// Namespace 0x80000000 of the string tables (dword_503E00): the
     /// resource names of Sys80:84/85, saved in BGI.gdb, and spared by 80:D8.
     pub(crate) fn resource_names(&self) -> &[String] {
-        self.string_hash_tables.get(&RESOURCE_NAMESPACE).map_or(&[], Vec::as_slice)
+        self.string_hash_tables
+            .get(&RESOURCE_NAMESPACE)
+            .map_or(&[], Vec::as_slice)
     }
 
     /// sub_496070(0x80000000, ..): a zero count removes the namespace.
@@ -9276,7 +9630,10 @@ impl Vm {
     fn sys80_84_intern_resource_name(&mut self) -> VmResult<Value> {
         let name = self.pop_string_lossy()?;
         // sub_496200 on namespace 0x80000000 (created on first use).
-        let names = self.string_hash_tables.entry(RESOURCE_NAMESPACE).or_default();
+        let names = self
+            .string_hash_tables
+            .entry(RESOURCE_NAMESPACE)
+            .or_default();
         if !names.iter().any(|entry| entry == &name) {
             names.push(name);
         }
@@ -9422,23 +9779,57 @@ impl Vm {
         id: u16,
     ) -> VmResult<Option<Value>> {
         let result = match (group, id) {
-            (0x81, 0x00) if matches!(self.native_abi_profile, NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani | NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern) => {
+            (0x81, 0x00)
+                if matches!(
+                    self.native_abi_profile,
+                    NativeAbiProfile::Amachoco
+                        | NativeAbiProfile::Anipani
+                        | NativeAbiProfile::HoukagoFd
+                        | NativeAbiProfile::Modern
+                ) =>
+            {
                 // sub_494EF0 -> sub_49EA60: 0 selects CP932, 1 selects UTF-8.
                 let mode = self.pop_int()?;
                 let valid = (0..=1).contains(&mode);
                 if valid {
-                    self.system81_shared.lock().expect("system81 state poisoned")
+                    self.system81_shared
+                        .lock()
+                        .expect("system81 state poisoned")
                         .native_utf8_override = Some(mode == 1);
                 }
                 Value::Int(i32::from(valid))
             }
-            (0x81, 0x01..=0x03) if matches!(self.native_abi_profile, NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern) => {
-                let requested = if id == 0x02 { Some(self.pop_int()?) } else { None };
-                let current = self.system81_shared.lock().expect("system81 state poisoned").ui_language;
-                let language = if requested == Some(0) || current.is_none() { api.user_ui_language() } else { current.unwrap() };
+            (0x81, 0x01..=0x03)
+                if matches!(
+                    self.native_abi_profile,
+                    NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern
+                ) =>
+            {
+                let requested = if id == 0x02 {
+                    Some(self.pop_int()?)
+                } else {
+                    None
+                };
+                let current = self
+                    .system81_shared
+                    .lock()
+                    .expect("system81 state poisoned")
+                    .ui_language;
+                let language = if requested == Some(0) || current.is_none() {
+                    api.user_ui_language()
+                } else {
+                    current.unwrap()
+                };
                 let language = requested.filter(|value| *value != 0).unwrap_or(language);
-                self.system81_shared.lock().expect("system81 state poisoned").ui_language = Some(language);
-                Value::Int(if id == 0x01 { i32::from(language & 0x3ff == 17) } else { language })
+                self.system81_shared
+                    .lock()
+                    .expect("system81 state poisoned")
+                    .ui_language = Some(language);
+                Value::Int(if id == 0x01 {
+                    i32::from(language & 0x3ff == 17)
+                } else {
+                    language
+                })
             }
             (0x80, 0x53) => {
                 // sub_489070 -> sub_48D190 arms the one-shot global gate.
@@ -9661,8 +10052,17 @@ impl Vm {
                     .message_auxiliary_input_mask = mask;
                 Value::None
             }
-            (0x81, 0x21) if matches!(self.native_abi_profile, NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani) => self.sys81_convert_cp932()?,
-            (0x81, 0x27) if self.native_abi_profile == NativeAbiProfile::Anipani => self.sys81_probe_utf8()?,
+            (0x81, 0x21)
+                if matches!(
+                    self.native_abi_profile,
+                    NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani
+                ) =>
+            {
+                self.sys81_convert_cp932()?
+            }
+            (0x81, 0x27) if self.native_abi_profile == NativeAbiProfile::Anipani => {
+                self.sys81_probe_utf8()?
+            }
             (0x81, 0x28) => self.sys81_open_stream(api)?,
             (0x81, 0x29) => self.sys81_close_stream()?,
             (0x81, 0x2a) => self.sys81_transfer_stream(api)?,
@@ -9888,7 +10288,11 @@ impl Vm {
                         packed.extend_from_slice(&bytes);
                         packed.push(0);
                     }
-                    let output = if destination == 0 { packed.len() } else { entries.len() };
+                    let output = if destination == 0 {
+                        packed.len()
+                    } else {
+                        entries.len()
+                    };
                     let output = u32::try_from(output)
                         .map_err(|_| VmError::Runtime("archive directory size overflow".into()))?;
                     if destination != 0 && !packed.is_empty() {
@@ -9965,7 +10369,13 @@ impl Vm {
                 let data_bytes = self.pop_int()? as u32;
                 let code_bytes = self.pop_int()? as u32;
                 let operand_slots = self.pop_int()? as u32;
-                Value::Int(self.start_child_thread(operand_slots, code_bytes, data_bytes, initial_ip, false)?)
+                Value::Int(self.start_child_thread(
+                    operand_slots,
+                    code_bytes,
+                    data_bytes,
+                    initial_ip,
+                    false,
+                )?)
             }
             (0x81, 0x60) => {
                 // sub_4615A0: index >= 8 (unsigned) -> 1, a zero dimension
@@ -9988,12 +10398,16 @@ impl Vm {
             (0x81, 0x62) => {
                 // sub_45ED90: dword_50721C = mode for mode <= 1 (unsigned).
                 let mode = self.pop_int()?;
-                Value::Int(i32::from(mode as u32 <= 1 && api.set_window_monitor_adapter_mode(mode)))
+                Value::Int(i32::from(
+                    mode as u32 <= 1 && api.set_window_monitor_adapter_mode(mode),
+                ))
             }
             (0x81, 0x63) => {
                 // sub_45EDC0: dword_565EAC = mode for mode <= 2 (unsigned).
                 let mode = self.pop_int()?;
-                Value::Int(i32::from(mode as u32 <= 2 && api.set_config_input_mode(mode)))
+                Value::Int(i32::from(
+                    mode as u32 <= 2 && api.set_config_input_mode(mode),
+                ))
             }
             (0x81, 0x64) => {
                 let height = self.pop_int()?;
@@ -10110,7 +10524,8 @@ impl Vm {
                         if lead == 0 {
                             break;
                         }
-                        let unit = if (0x81..=0x9f).contains(&lead) || lead >= 0xe0 && lead <= 0xfc {
+                        let unit = if (0x81..=0x9f).contains(&lead) || lead >= 0xe0 && lead <= 0xfc
+                        {
                             let trail = self.read_int(at.wrapping_add(1), 0)?;
                             at = at.wrapping_add(2);
                             u32::from(lead) << 8 | trail
@@ -10158,7 +10573,11 @@ impl Vm {
                     .blob_tables
                     .remove(&handle)
                     .is_some();
-                Value::Int(if removed { 0 } else { system81_state::NATIVE_NOT_FOUND })
+                Value::Int(if removed {
+                    0
+                } else {
+                    system81_state::NATIVE_NOT_FOUND
+                })
             }
             (0x81, 0xd2) => {
                 // sub_46AF30(index output, index, source; size in edx).
@@ -10182,9 +10601,16 @@ impl Vm {
                 } else {
                     let range = self.resolve_range(source, size as usize)?;
                     let bytes = self.memory[range].to_vec();
-                    let mut state = self.system81_shared.lock().expect("system81 state poisoned");
+                    let mut state = self
+                        .system81_shared
+                        .lock()
+                        .expect("system81 state poisoned");
                     let table = state.blob_tables.get_mut(&handle).expect("checked above");
-                    let slot = if index_destination != 0 { table.first_free() } else { index };
+                    let slot = if index_destination != 0 {
+                        table.first_free()
+                    } else {
+                        index
+                    };
                     table.store(slot, bytes);
                     drop(state);
                     if index_destination != 0 {
@@ -10197,12 +10623,21 @@ impl Vm {
                 // sub_46AF90 -> sub_447A20: free one stored slot.
                 let index = self.pop_int()? as u32;
                 let handle = self.pop_int()? as u32;
-                let mut state = self.system81_shared.lock().expect("system81 state poisoned");
-                Value::Int(match state.blob_tables.get_mut(&handle).map(|table| table.remove(index)) {
-                    None => system81_state::NATIVE_NOT_FOUND,
-                    Some(true) => 0,
-                    Some(false) => system81_state::NATIVE_INVALID_INDEX,
-                })
+                let mut state = self
+                    .system81_shared
+                    .lock()
+                    .expect("system81 state poisoned");
+                Value::Int(
+                    match state
+                        .blob_tables
+                        .get_mut(&handle)
+                        .map(|table| table.remove(index))
+                    {
+                        None => system81_state::NATIVE_NOT_FOUND,
+                        Some(true) => 0,
+                        Some(false) => system81_state::NATIVE_INVALID_INDEX,
+                    },
+                )
             }
             (0x81, 0xd4) => {
                 // sub_46AFC0 -> sub_447A60: copy a stored slot (when the
@@ -10212,8 +10647,14 @@ impl Vm {
                 let size_destination = self.pop_ptr()?;
                 let destination = self.pop_ptr()?;
                 let fetched = {
-                    let state = self.system81_shared.lock().expect("system81 state poisoned");
-                    state.blob_tables.get(&handle).map(|table| table.get(index).map(<[u8]>::to_vec))
+                    let state = self
+                        .system81_shared
+                        .lock()
+                        .expect("system81 state poisoned");
+                    state
+                        .blob_tables
+                        .get(&handle)
+                        .map(|table| table.get(index).map(<[u8]>::to_vec))
                 };
                 match fetched {
                     None => Value::Int(system81_state::NATIVE_NOT_FOUND),
@@ -10236,7 +10677,10 @@ impl Vm {
                 let count_destination = self.pop_ptr()?;
                 let destination = self.pop_ptr()?;
                 let entries = {
-                    let state = self.system81_shared.lock().expect("system81 state poisoned");
+                    let state = self
+                        .system81_shared
+                        .lock()
+                        .expect("system81 state poisoned");
                     state.blob_tables.get(&handle).map(|table| table.entries())
                 };
                 match entries {
@@ -10254,8 +10698,22 @@ impl Vm {
                     }
                 }
             }
-            (0x81, 0xda) if matches!(self.native_abi_profile, NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani) => self.sys81_sentence_lookup()?,
-            (0x81, 0xd8) if matches!(self.native_abi_profile, NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani) => self.sys81_sentence_import()?,
+            (0x81, 0xda)
+                if matches!(
+                    self.native_abi_profile,
+                    NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani
+                ) =>
+            {
+                self.sys81_sentence_lookup()?
+            }
+            (0x81, 0xd8)
+                if matches!(
+                    self.native_abi_profile,
+                    NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani
+                ) =>
+            {
+                self.sys81_sentence_import()?
+            }
             (0x81, 0xe0) => {
                 // sub_48CFE0 -> sub_472A10(current dir, message, exit code,
                 // dir, command, show, hide main window, wait, retry). The
@@ -10331,7 +10789,10 @@ impl Vm {
                 let name = self.pop_string_lossy()?;
                 match api.create_named_mutex(&name) {
                     Some(token) => {
-                        let mut state = self.system81_shared.lock().expect("system81 state poisoned");
+                        let mut state = self
+                            .system81_shared
+                            .lock()
+                            .expect("system81 state poisoned");
                         state.last_mutex_handle = state.last_mutex_handle.wrapping_add(1);
                         let handle = state.last_mutex_handle;
                         state.named_mutexes.insert(handle, token);
@@ -10486,7 +10947,12 @@ impl Vm {
                 } else {
                     let text = self.value_as_string_lossy(path)?;
                     let parts = msvc_wsplitpath(&text);
-                    for (destination, part) in [(drive, &parts[0]), (dir, &parts[1]), (name, &parts[2]), (ext, &parts[3])] {
+                    for (destination, part) in [
+                        (drive, &parts[0]),
+                        (dir, &parts[1]),
+                        (name, &parts[2]),
+                        (ext, &parts[3]),
+                    ] {
                         if destination != 0 {
                             self.write_c_string(destination, part)?;
                         }
@@ -10634,8 +11100,18 @@ impl Vm {
                     }
                 }
                 // Then the class must be one of sub_46E500's ten tables (-1).
-                const CLASSES: [u32; 10] =
-                    [0x40, 0x80, 0x100, 0x200, 0x1000, 0x2000, 0x4000, 0x8000, 0x4000_0000, 0x8000_0000];
+                const CLASSES: [u32; 10] = [
+                    0x40,
+                    0x80,
+                    0x100,
+                    0x200,
+                    0x1000,
+                    0x2000,
+                    0x4000,
+                    0x8000,
+                    0x4000_0000,
+                    0x8000_0000,
+                ];
                 if !CLASSES.contains(&(class_mask as u32)) {
                     return Err(VmError::Runtime(format!(
                         "無効なスタンダードキー [ ${:08X} ] が指定されました",
@@ -10704,12 +11180,18 @@ impl Vm {
                     let range = self.resolve_range(source, requested)?;
                     let input = &self.memory[range];
                     let decoded = if input.starts_with(b"DSC FORMAT 1.00") {
-                        if input.get(20..24).is_some_and(|v| u32::from_le_bytes(v.try_into().unwrap()) <= 0x400_0000) {
+                        if input.get(20..24).is_some_and(|v| {
+                            u32::from_le_bytes(v.try_into().unwrap()) <= 0x400_0000
+                        }) {
                             ethornell_archive::dsc_decode(input).unwrap_or_default()
-                        } else { Vec::new() }
+                        } else {
+                            Vec::new()
+                        }
                     } else if input.starts_with(b"CompressedBG___") {
                         ethornell_image::decode_cbg_native_buffer(input).unwrap_or_default()
-                    } else { input.to_vec() };
+                    } else {
+                        input.to_vec()
+                    };
                     let count = decoded.len();
                     let range = self.resolve_write_range(destination, count)?;
                     self.memory[range].copy_from_slice(&decoded);
@@ -12123,7 +12605,11 @@ impl Vm {
     fn value_as_fixed_bytes(&self, value: Value, size: usize) -> VmResult<Vec<u8>> {
         match value {
             Value::Str(text) => {
-                let encoded=if self.native_utf8_enabled() {std::borrow::Cow::Borrowed(text.as_bytes())} else {encoding_rs::SHIFT_JIS.encode(&text).0};
+                let encoded = if self.native_utf8_enabled() {
+                    std::borrow::Cow::Borrowed(text.as_bytes())
+                } else {
+                    encoding_rs::SHIFT_JIS.encode(&text).0
+                };
                 let mut bytes = Vec::with_capacity(size);
                 bytes.extend_from_slice(&encoded);
                 bytes.push(0);
@@ -12132,8 +12618,7 @@ impl Vm {
                 Ok(bytes)
             }
             Value::Int(ptr) => {
-                let range =
-                    self.resolve_range(ptr as u32, size)?;
+                let range = self.resolve_range(ptr as u32, size)?;
                 Ok(self.memory[range].to_vec())
             }
             Value::Ptr(ptr) => {
@@ -12527,7 +13012,11 @@ impl Vm {
         if ptr >> 26 == 2 {
             // The data region shares the local window with the code region.
             let offset = ptr & 0x03FF_FFFF;
-            return if offset < CODE_WINDOW_OFFSET { LOCAL_MEMORY_BASE + offset } else { u32::MAX };
+            return if offset < CODE_WINDOW_OFFSET {
+                LOCAL_MEMORY_BASE + offset
+            } else {
+                u32::MAX
+            };
         }
         if ptr >> 26 == 1 {
             let offset = ptr & 0x03FF_FFFF;
@@ -12539,12 +13028,18 @@ impl Vm {
         }
         if target_heap::TargetHeap::is_heap_address(ptr) {
             return match self.target_heap.translate(ptr) {
-                Some((backing, inside)) => LOCAL_MEMORY_BASE.saturating_add(backing).saturating_add(inside),
+                Some((backing, inside)) => LOCAL_MEMORY_BASE
+                    .saturating_add(backing)
+                    .saturating_add(inside),
                 None => u32::MAX,
             };
         }
         // Segment 0: the globals, below the local window.
-        if ptr < LOCAL_MEMORY_BASE { ptr } else { u32::MAX }
+        if ptr < LOCAL_MEMORY_BASE {
+            ptr
+        } else {
+            u32::MAX
+        }
     }
 
     /// `memory_addr` for addresses that need no heap lookup (debug watch
@@ -12762,7 +13257,10 @@ fn msvc_wsplitpath(path: &str) -> [String; 4] {
     } else {
         (String::new(), &chars[..])
     };
-    let split = rest.iter().rposition(|&c| c == '\\' || c == '/').map_or(0, |index| index + 1);
+    let split = rest
+        .iter()
+        .rposition(|&c| c == '\\' || c == '/')
+        .map_or(0, |index| index + 1);
     let directory = rest[..split].iter().collect::<String>();
     let leaf = &rest[split..];
     let dot = leaf.iter().rposition(|&c| c == '.').unwrap_or(leaf.len());
@@ -12792,8 +13290,18 @@ fn ntfs_order_key(name: &str) -> Vec<u16> {
         .collect()
 }
 
-fn target_file_enumeration_order(found: &[String], recursive: bool, max_count: usize) -> Vec<String> {
-    fn walk(paths: &[Vec<String>], depth: usize, recursive: bool, max: usize, out: &mut Vec<String>) {
+fn target_file_enumeration_order(
+    found: &[String],
+    recursive: bool,
+    max_count: usize,
+) -> Vec<String> {
+    fn walk(
+        paths: &[Vec<String>],
+        depth: usize,
+        recursive: bool,
+        max: usize,
+        out: &mut Vec<String>,
+    ) {
         let mut files = paths
             .iter()
             .filter(|path| path.len() == depth + 1)
@@ -12820,18 +13328,30 @@ fn target_file_enumeration_order(found: &[String], recursive: bool, max_count: u
         for directory in directories {
             let nested = paths
                 .iter()
-                .filter(|path| path.len() > depth + 1 && path[depth].eq_ignore_ascii_case(&directory))
+                .filter(|path| {
+                    path.len() > depth + 1 && path[depth].eq_ignore_ascii_case(&directory)
+                })
                 .cloned()
                 .collect::<Vec<_>>();
             let before = out.len();
             // a7 - v23 is unsigned: it wraps once the quirk has passed the limit.
-            walk(&nested, depth + 1, true, if max != 0 { max.wrapping_sub(count) } else { 0 }, out);
+            walk(
+                &nested,
+                depth + 1,
+                true,
+                if max != 0 { max.wrapping_sub(count) } else { 0 },
+                out,
+            );
             count += out.len() - before;
         }
     }
     let paths = found
         .iter()
-        .map(|path| path.split(['\\', '/']).map(str::to_owned).collect::<Vec<_>>())
+        .map(|path| {
+            path.split(['\\', '/'])
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>();
     let mut out = Vec::new();
     walk(&paths, 0, recursive, max_count, &mut out);
@@ -14174,7 +14694,8 @@ mod tests {
             pixels: &[u8],
         ) -> bool {
             self.bitmap_pixels.insert(bitmap, pixels.to_vec());
-            self.bitmap_dimensions.insert(bitmap, (width as u32, height as u32));
+            self.bitmap_dimensions
+                .insert(bitmap, (width as u32, height as u32));
             true
         }
 
@@ -14435,13 +14956,21 @@ mod tests {
         let mut vm = Vm::new();
         let mut api = ArchiveApi;
         let packed = b"AnimationSet000\0Animation000\0";
-        vm.stack.extend([Value::Ptr(0), Value::Ptr(0x100), Value::Str("animation.arc".into())]);
+        vm.stack.extend([
+            Value::Ptr(0),
+            Value::Ptr(0x100),
+            Value::Str("animation.arc".into()),
+        ]);
         vm.dispatch(&op, &mut api).unwrap();
         assert_eq!(vm.stack.pop(), Some(Value::Int(0x100)));
         assert_eq!(vm.read_int(0x100, 2).unwrap(), packed.len() as u32);
 
         vm.memory[0x200..0x240].fill(0xa5);
-        vm.stack.extend([Value::Ptr(0x200), Value::Ptr(0x100), Value::Str("animation.arc".into())]);
+        vm.stack.extend([
+            Value::Ptr(0x200),
+            Value::Ptr(0x100),
+            Value::Str("animation.arc".into()),
+        ]);
         vm.dispatch(&op, &mut api).unwrap();
         assert_eq!(vm.stack.pop(), Some(Value::Int(0x100)));
         assert_eq!(vm.read_int(0x100, 2).unwrap(), 2);
@@ -14450,13 +14979,21 @@ mod tests {
 
         for destination in [0, 0x200] {
             vm.write_int(0x100, 2, 0x1234).unwrap();
-            vm.stack.extend([Value::Ptr(destination), Value::Ptr(0x100), Value::Str("absent.arc".into())]);
+            vm.stack.extend([
+                Value::Ptr(destination),
+                Value::Ptr(0x100),
+                Value::Str("absent.arc".into()),
+            ]);
             vm.dispatch(&op, &mut api).unwrap();
             assert_eq!(vm.stack.pop(), Some(Value::Int(1)));
             assert_eq!(vm.read_int(0x100, 2).unwrap(), 0x1234);
             assert_eq!(&vm.memory[0x200..0x200 + packed.len()], packed);
 
-            vm.stack.extend([Value::Ptr(destination), Value::Ptr(0x100), Value::Str("empty.arc".into())]);
+            vm.stack.extend([
+                Value::Ptr(destination),
+                Value::Ptr(0x100),
+                Value::Str("empty.arc".into()),
+            ]);
             vm.dispatch(&op, &mut api).unwrap();
             assert_eq!(vm.stack.pop(), Some(Value::Int(0x100)));
             assert_eq!(vm.read_int(0x100, 2).unwrap(), 0);
@@ -14465,17 +15002,38 @@ mod tests {
 
     #[test]
     fn file_enumeration_follows_the_find_first_file_walk() {
-        let found = ["b.txt", "Sub\\z.txt", "a.txt", "Sub\\Deep\\y.txt", "Sub\\c.txt"]
-            .map(String::from);
+        let found = [
+            "b.txt",
+            "Sub\\z.txt",
+            "a.txt",
+            "Sub\\Deep\\y.txt",
+            "Sub\\c.txt",
+        ]
+        .map(String::from);
         assert_eq!(
             super::target_file_enumeration_order(&found, true, 0),
-            ["a.txt", "b.txt", "Sub\\c.txt", "Sub\\z.txt", "Sub\\Deep\\y.txt"]
+            [
+                "a.txt",
+                "b.txt",
+                "Sub\\c.txt",
+                "Sub\\z.txt",
+                "Sub\\Deep\\y.txt"
+            ]
         );
-        assert_eq!(super::target_file_enumeration_order(&found, false, 1), ["a.txt"]);
+        assert_eq!(
+            super::target_file_enumeration_order(&found, false, 1),
+            ["a.txt"]
+        );
         // a7 - v23 reaches zero for the subdirectory, which then has no limit.
         assert_eq!(
             super::target_file_enumeration_order(&found, true, 2),
-            ["a.txt", "b.txt", "Sub\\c.txt", "Sub\\z.txt", "Sub\\Deep\\y.txt"]
+            [
+                "a.txt",
+                "b.txt",
+                "Sub\\c.txt",
+                "Sub\\z.txt",
+                "Sub\\Deep\\y.txt"
+            ]
         );
         // Inside Sub the limit is 1; Deep then gets 1 - 1 = 0, unlimited again.
         assert_eq!(
@@ -14488,10 +15046,19 @@ mod tests {
     fn enumerated_names_measure_pack_and_fail_on_overflow() {
         let names = ["ab".to_string(), "c".to_string()];
         let mut vm = Vm::new();
-        assert_eq!(vm.write_enumerated_names(0, 0, &names).unwrap(), Value::Int(5));
-        assert_eq!(vm.write_enumerated_names(0x100, 5, &names).unwrap(), Value::Int(2));
+        assert_eq!(
+            vm.write_enumerated_names(0, 0, &names).unwrap(),
+            Value::Int(5)
+        );
+        assert_eq!(
+            vm.write_enumerated_names(0x100, 5, &names).unwrap(),
+            Value::Int(2)
+        );
         assert_eq!(&vm.memory[0x100..0x105], b"ab\0c\0");
-        assert_eq!(vm.write_enumerated_names(0x200, 4, &names).unwrap(), Value::Int(-1));
+        assert_eq!(
+            vm.write_enumerated_names(0x200, 4, &names).unwrap(),
+            Value::Int(-1)
+        );
         assert_eq!(&vm.memory[0x200..0x203], b"ab\0");
     }
 
@@ -14519,7 +15086,8 @@ mod tests {
             centered: bool,
             color: i32,
         ) -> bool {
-            self.drawn.push((window, items.to_vec(), columns, centered, color));
+            self.drawn
+                .push((window, items.to_vec(), columns, centered, color));
             window == 0xB000_0001_u32 as i32
         }
     }
@@ -14556,13 +15124,24 @@ mod tests {
         assert!(vm.stack.is_empty());
         assert_eq!(
             api.drawn,
-            [(window, vec!["Yes".to_string(), "No".to_string()], 2, true, 0x00ff_00ff)]
+            [(
+                window,
+                vec!["Yes".to_string(), "No".to_string()],
+                2,
+                true,
+                0x00ff_00ff
+            )]
         );
 
-        for (window, count, columns) in [(window, 17, 2), (window, 2, 17), (window, 2, 0), (5, 2, 2)] {
+        for (window, count, columns) in
+            [(window, 17, 2), (window, 2, 17), (window, 2, 0), (5, 2, 2)]
+        {
             vm.stack.clear();
             vm.stack.extend(operands(window, count, columns));
-            assert!(vm.dispatch(&grid, &mut api).is_err(), "{window} {count} {columns}");
+            assert!(
+                vm.dispatch(&grid, &mut api).is_err(),
+                "{window} {count} {columns}"
+            );
         }
     }
 
@@ -14595,7 +15174,10 @@ mod tests {
         vm.dispatch(&sys(0x36), &mut api).unwrap();
         assert!(vm.stack.is_empty());
         assert!(vm.additional_resource_search_enabled);
-        assert_eq!(vm.additional_resource_paths, ["Script\\CVTD", "Graphic\\CVTD"]);
+        assert_eq!(
+            vm.additional_resource_paths,
+            ["Script\\CVTD", "Graphic\\CVTD"]
+        );
         assert_eq!(api.fallback, Some(true));
 
         let names = [0x200u32, 0x210];
@@ -14612,7 +15194,10 @@ mod tests {
             assert_eq!(vm.stack.pop(), Some(Value::Int(expected)));
         }
         let members = vec!["data05001.arc".to_string(), "data03001.arc".to_string()];
-        assert_eq!(api.composites, [("data05xxx.arc".to_string(), members.clone())]);
+        assert_eq!(
+            api.composites,
+            [("data05xxx.arc".to_string(), members.clone())]
+        );
         assert_eq!(vm.composite_archives.get("data05xxx.arc"), Some(&members));
 
         vm.stack.push(Value::Ptr(0x300));
@@ -15042,7 +15627,13 @@ mod tests {
             // Jump targets are code-region offsets: the loop starts at code
             // offset 2 (file offset 0x12).
             instructions: std::sync::Arc::new(vec![
-                test_instruction(0x10, 0x00, "push_byte", vec![0x00, 0x00], vec![BpOperand::U8(0)]),
+                test_instruction(
+                    0x10,
+                    0x00,
+                    "push_byte",
+                    vec![0x00, 0x00],
+                    vec![BpOperand::U8(0)],
+                ),
                 test_instruction(
                     0x12,
                     0x02,
@@ -16411,7 +17002,10 @@ mod tests {
     fn native_markup_strip_matches_sub_438430() {
         let strip = |text: &str| {
             let bytes = encoding_rs::SHIFT_JIS.encode(text).0;
-            encoding_rs::SHIFT_JIS.decode(&strip_native_markup_tags(&bytes)).0.into_owned()
+            encoding_rs::SHIFT_JIS
+                .decode(&strip_native_markup_tags(&bytes))
+                .0
+                .into_owned()
         };
         assert_eq!(strip("序章<Ruby>本文</Ruby><1>保持"), "序章本文<1>保持");
         assert_eq!(strip("未閉合<Tag"), "未閉合<Tag");
@@ -16720,7 +17314,11 @@ mod tests {
         vm.write_c_string_raw(empty, "").unwrap();
         vm.write_c_string_raw(empty + 1, "AutoSave").unwrap();
         for pointer in [Value::Int(empty as i32), Value::Ptr(empty)] {
-            vm.stack = vec![Value::Int(3790), Value::Str("data02xxx.arc".into()), pointer];
+            vm.stack = vec![
+                Value::Int(3790),
+                Value::Str("data02xxx.arc".into()),
+                pointer,
+            ];
             vm.normalize_graph_string_args(0x90, 0x10).unwrap();
             assert_eq!(vm.stack.last(), Some(&Value::Str(String::new())));
         }
@@ -17071,7 +17669,15 @@ mod tests {
     fn graph_text_control_pointer_does_not_read_adjacent_literals() {
         let mut vm = Vm::new();
         let pointer = crate::FRAME_SEGMENT | 0x3000;
-        for text in ["\u{c}", "\t", "\r\n", "\u{b}", "", "<ns>line</ns>", "0x1234"] {
+        for text in [
+            "\u{c}",
+            "\t",
+            "\r\n",
+            "\u{b}",
+            "",
+            "<ns>line</ns>",
+            "0x1234",
+        ] {
             vm.write_c_string_raw(pointer, text).unwrap();
             let neighbour = pointer + text.len() as u32 + 1;
             vm.write_c_string_raw(neighbour, "</ns>").unwrap();
@@ -17080,20 +17686,34 @@ mod tests {
             let original = vm.memory[range.clone()].to_vec();
             for (group, id, from_top) in [
                 (0x90, 0x90, 4),
-                (0x91, 0x91, 3), (0x91, 0x93, 4),
-                (0x91, 0x9c, 8), (0x91, 0x9c, 10),
-                (0x91, 0x9d, 9), (0x91, 0x9d, 11),
-                (0x92, 0x1c, 6), (0x92, 0x1d, 7),
-                (0x92, 0x1e, 5), (0x92, 0x1f, 0),
-                (0x92, 0x90, 13), (0x92, 0x91, 9),
-                (0x92, 0x9c, 14), (0x92, 0x9c, 17),
+                (0x91, 0x91, 3),
+                (0x91, 0x93, 4),
+                (0x91, 0x9c, 8),
+                (0x91, 0x9c, 10),
+                (0x91, 0x9d, 9),
+                (0x91, 0x9d, 11),
+                (0x92, 0x1c, 6),
+                (0x92, 0x1d, 7),
+                (0x92, 0x1e, 5),
+                (0x92, 0x1f, 0),
+                (0x92, 0x90, 13),
+                (0x92, 0x91, 9),
+                (0x92, 0x9c, 14),
+                (0x92, 0x9c, 17),
             ] {
-                let count = super::documented_opcode(super::NativeOpcode { group, id }).unwrap().parameters.len();
+                let count = super::documented_opcode(super::NativeOpcode { group, id })
+                    .unwrap()
+                    .parameters
+                    .len();
                 vm.stack = vec![Value::Int(0); count];
                 let index = count - 1 - from_top;
                 vm.stack[index] = Value::Ptr(pointer);
                 vm.normalize_graph_string_args(group, id).unwrap();
-                assert_eq!(vm.stack[index], Value::Str(text.into()), "{group:02x}:{id:02x} slot {from_top}");
+                assert_eq!(
+                    vm.stack[index],
+                    Value::Str(text.into()),
+                    "{group:02x}:{id:02x} slot {from_top}"
+                );
                 assert_eq!(&vm.memory[range.clone()], original.as_slice());
             }
         }
@@ -17200,11 +17820,17 @@ mod tests {
         vm.set_native_abi_profile(super::NativeAbiProfile::Amachoco);
         for group in ["first", "second"] {
             let mut bytes = 1u32.to_le_bytes().to_vec();
-            bytes.extend_from_slice(group.as_bytes()); bytes.push(0);
-            bytes.extend_from_slice(&1u32.to_le_bytes()); bytes.extend_from_slice(b"key\0value\0");
+            bytes.extend_from_slice(group.as_bytes());
+            bytes.push(0);
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.extend_from_slice(b"key\0value\0");
             vm.memory[0x3000..0x3000 + bytes.len()].copy_from_slice(&bytes);
             vm.stack = vec![Value::Ptr(0x3000), Value::Int(bytes.len() as i32)];
-            assert_eq!(vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0xd8).unwrap(), Some(Value::Int(1)));
+            assert_eq!(
+                vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0xd8)
+                    .unwrap(),
+                Some(Value::Int(1))
+            );
         }
         {
             let state = vm.system81_shared.lock().unwrap();
@@ -17212,8 +17838,19 @@ mod tests {
             assert_eq!(state.sentence_table.get("second", "key"), Some("value"));
         }
         vm.stack = vec![Value::Ptr(0), Value::Int(-1)];
-        assert_eq!(vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0xd8).unwrap(), Some(Value::Int(1)));
-        assert_eq!(vm.system81_shared.lock().unwrap().sentence_table.get("second", "key"), None);
+        assert_eq!(
+            vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0xd8)
+                .unwrap(),
+            Some(Value::Int(1))
+        );
+        assert_eq!(
+            vm.system81_shared
+                .lock()
+                .unwrap()
+                .sentence_table
+                .get("second", "key"),
+            None
+        );
     }
 
     #[test]
@@ -17238,7 +17875,10 @@ mod tests {
     fn font_pitch_lookup_rejects_null_only_when_a_face_matches() {
         let mut vm = Vm::new();
         vm.set_native_abi_profile(super::NativeAbiProfile::Anipani);
-        let mut api = SchedulingApi { font_families: vec!["Owned Test".into()], ..SchedulingApi::default() };
+        let mut api = SchedulingApi {
+            font_families: vec!["Owned Test".into()],
+            ..SchedulingApi::default()
+        };
         let instruction = test_instruction(0, 0xb0, "usr1", vec![0xb0, 0xc6], Vec::new());
         vm.stack = vec![Value::Ptr(0), Value::Str("missing".into())];
         vm.dispatch(&instruction, &mut api).unwrap();
@@ -17253,7 +17893,11 @@ mod tests {
         vm.set_native_abi_profile(super::NativeAbiProfile::Anipani);
         vm.memory[..4].copy_from_slice(&[1, 2, 3, 4]);
         vm.stack = vec![Value::Ptr(0), Value::Str("日本".into())];
-        assert_eq!(vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0x21).unwrap(), Some(Value::None));
+        assert_eq!(
+            vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0x21)
+                .unwrap(),
+            Some(Value::None)
+        );
         assert_eq!(&vm.memory[..4], &[1, 2, 3, 4]);
         assert!(vm.stack.is_empty());
     }
@@ -17263,14 +17907,24 @@ mod tests {
         let mut vm = Vm::new();
         vm.set_native_abi_profile(super::NativeAbiProfile::Anipani);
         let mut bytes = 1u32.to_le_bytes().to_vec();
-        bytes.extend_from_slice("日本\0".as_bytes()); bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice("日本\0".as_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(b"key\0\0");
-        vm.system81_shared.lock().unwrap().sentence_table = super::sentence_table::SentenceTable::parse(&bytes).unwrap();
+        vm.system81_shared.lock().unwrap().sentence_table =
+            super::sentence_table::SentenceTable::parse(&bytes).unwrap();
         vm.memory[0x3000..0x3007].copy_from_slice("日本\0".as_bytes());
         vm.memory[0x3100] = 77;
         for (key, expected) in [("missing", 77), ("key", 0)] {
-            vm.stack = vec![Value::Ptr(0x3100), Value::Ptr(0x3000), Value::Str(key.into())];
-            assert_eq!(vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0xda).unwrap(), Some(Value::Int(0)));
+            vm.stack = vec![
+                Value::Ptr(0x3100),
+                Value::Ptr(0x3000),
+                Value::Str(key.into()),
+            ];
+            assert_eq!(
+                vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0xda)
+                    .unwrap(),
+                Some(Value::Int(0))
+            );
             assert_eq!(vm.memory[0x3100], expected);
         }
     }
@@ -17282,8 +17936,15 @@ mod tests {
         // C2 A2 is valid UTF-8 for cent, but CP932 means two halfwidth glyphs.
         vm.memory[0x3000..0x3003].copy_from_slice(&[0xc2, 0xa2, 0]);
         vm.stack = vec![Value::Int(123), Value::Ptr(0x3100), Value::Ptr(0x3000)];
-        assert_eq!(vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0x21).unwrap(), Some(Value::None));
-        assert_eq!(&vm.memory[0x3100..0x3107], &[0xef, 0xbe, 0x82, 0xef, 0xbd, 0xa2, 0]);
+        assert_eq!(
+            vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0x21)
+                .unwrap(),
+            Some(Value::None)
+        );
+        assert_eq!(
+            &vm.memory[0x3100..0x3107],
+            &[0xef, 0xbe, 0x82, 0xef, 0xbd, 0xa2, 0]
+        );
         assert_eq!(vm.stack, [Value::Int(123)]);
     }
 
@@ -17371,8 +18032,13 @@ mod tests {
         vm.memory[0x3300..0x3305].copy_from_slice(&[b'A', 0x82, 0xa0, 0xb1, 0]);
         for text in [Value::Str("Aあｱ".into()), Value::Ptr(0x3300)] {
             vm.stack = vec![
-                Value::Ptr(0x3200), text, Value::Int(0), Value::Int(28),
-                Value::Int(100), Value::Int(0), Value::Int(0),
+                Value::Ptr(0x3200),
+                text,
+                Value::Int(0),
+                Value::Int(28),
+                Value::Int(100),
+                Value::Int(0),
+                Value::Int(0),
             ];
             vm.dispatch(&measure, &mut TraceApi).unwrap();
             assert_eq!(vm.stack, [Value::Int(0)]);
@@ -17410,7 +18076,10 @@ mod tests {
             Some(Value::None)
         );
         assert!(vm.stack.is_empty());
-        assert_eq!(vm.read_c_string_bytes(destination).unwrap(), "シナリオの台詞".as_bytes());
+        assert_eq!(
+            vm.read_c_string_bytes(destination).unwrap(),
+            "シナリオの台詞".as_bytes()
+        );
         assert_eq!(
             vm.mem_values.get(&vm.value_key(destination)),
             Some(&Value::Str("シナリオの台詞".into()))
@@ -18654,11 +19323,7 @@ mod tests {
         let error = vm
             .try_builtin_sys_with_api(&mut api, 0x80, 0x62)
             .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("キーの配列が長過ぎます")
-        );
+        assert!(error.to_string().contains("キーの配列が長過ぎます"));
         assert!(!api.fullscreen_hotkeys_enabled);
         assert!(api.fullscreen_hotkeys.is_empty());
     }
@@ -19014,7 +19679,13 @@ mod tests {
             functions: std::sync::Arc::new(Vec::new()),
             strings: std::sync::Arc::new(Vec::new()),
             instructions: std::sync::Arc::new(vec![
-                test_instruction(0x10, 0x00, "push_byte", vec![0x00, 0x00], vec![BpOperand::U8(0)]),
+                test_instruction(
+                    0x10,
+                    0x00,
+                    "push_byte",
+                    vec![0x00, 0x00],
+                    vec![BpOperand::U8(0)],
+                ),
                 test_instruction(0x12, 0x14, "jmp", vec![0x14], Vec::new()),
             ]),
             labels: std::sync::Arc::new([(0x10, 0), (0x12, 1)].into_iter().collect()),
@@ -19024,11 +19695,24 @@ mod tests {
         };
         let mut vm = Vm::new();
         vm.system81_shared.lock().unwrap().error_capture_mode = 1;
-        let report = vm.run(&program, &mut SchedulingApi::default(), &VmRunOptions::default());
+        let report = vm.run(
+            &program,
+            &mut SchedulingApi::default(),
+            &VmRunOptions::default(),
+        );
         assert_eq!(report.stop_reason, VmStopReason::Error);
-        let captured = vm.system81_shared.lock().unwrap().captured_error.clone().unwrap();
+        let captured = vm
+            .system81_shared
+            .lock()
+            .unwrap()
+            .captured_error
+            .clone()
+            .unwrap();
         assert!(captured.starts_with("Thread [ "), "{captured}");
-        assert!(captured.contains("Program [ err-test ] , IP [ $00000002 ] , Instruction [ $14 ]"), "{captured}");
+        assert!(
+            captured.contains("Program [ err-test ] , IP [ $00000002 ] , Instruction [ $14 ]"),
+            "{captured}"
+        );
         assert!(captured.contains("jmp to null target"), "{captured}");
     }
 
@@ -19269,7 +19953,11 @@ mod tests {
             report = vm.run_loaded(&mut TraceApi, &VmRunOptions::default());
         }
         assert!(vm.halted, "{report:?}");
-        assert_eq!(report.stop_reason, VmStopReason::InterpreterTerminated, "{report:?}");
+        assert_eq!(
+            report.stop_reason,
+            VmStopReason::InterpreterTerminated,
+            "{report:?}"
+        );
     }
 
     #[test]
@@ -19277,7 +19965,9 @@ mod tests {
         let program = ethornell_script::parse_bp_program(Some("frame-owner._bp".into()), &[0x17]);
         let mut owner = Vm::new();
         owner.start(&program);
-        owner.start_child_thread(16, 0x100, 0x100, 0, false).unwrap();
+        owner
+            .start_child_thread(16, 0x100, 0x100, 0, false)
+            .unwrap();
         let mut task = owner.async_tasks.remove(0);
         super::child_thread::lend_local_window(&mut owner, &mut task.vm);
         let child = &mut task.vm;
@@ -19302,9 +19992,13 @@ mod tests {
         let program = ethornell_script::parse_bp_program(Some("frame-owner._bp".into()), &[0x17]);
         let mut owner = Vm::new();
         owner.start(&program);
-        owner.start_child_thread(16, 0x100, 0x100, 0, false).unwrap();
+        owner
+            .start_child_thread(16, 0x100, 0x100, 0, false)
+            .unwrap();
         let limit = 0x3ff00;
-        owner.write_int(crate::FRAME_SEGMENT | limit, 2, 0x12345678).unwrap();
+        owner
+            .write_int(crate::FRAME_SEGMENT | limit, 2, 0x12345678)
+            .unwrap();
         let store = test_instruction(0, 0x11, "store_base", vec![0x11], Vec::new());
         owner.stack.push(Value::Int(limit as i32 - 1));
         owner.dispatch(&store, &mut TraceApi).unwrap();
@@ -19312,7 +20006,10 @@ mod tests {
             owner.stack.push(Value::Int(rejected as i32));
             assert!(owner.dispatch(&store, &mut TraceApi).is_err());
             assert_eq!(owner.mem_ptr, limit - 1);
-            assert_eq!(owner.read_int(crate::FRAME_SEGMENT | limit, 2).unwrap(), 0x12345678);
+            assert_eq!(
+                owner.read_int(crate::FRAME_SEGMENT | limit, 2).unwrap(),
+                0x12345678
+            );
         }
     }
 
@@ -19332,7 +20029,9 @@ mod tests {
             assert_eq!(vm.mem_ptr, size - 1);
         }
         let program = ethornell_script::parse_bp_program(Some("frame-worker._bp".into()), &[0x17]);
-        default.start_async_program_with_args(Value::Program(Arc::new(program)), Vec::new(), false).unwrap();
+        default
+            .start_async_program_with_args(Value::Program(Arc::new(program)), Vec::new(), false)
+            .unwrap();
         default.set_newest_async_thread_regions(0x100, 0x80, 16);
         let worker = &mut default.async_tasks.last_mut().unwrap().vm;
         worker.stack.push(Value::Int(0x80));
@@ -19376,10 +20075,23 @@ mod tests {
         drop(regions);
         // A block that does not fit, and an IP past the child's code block.
         let instruction = test_instruction(0, 0x81, "sys2", vec![0x81, 0x44], Vec::new());
-        vm.stack.extend([Value::Int(4), Value::Int(0x100), Value::Int(0x40001), Value::Int(0x15)]);
+        vm.stack.extend([
+            Value::Int(4),
+            Value::Int(0x100),
+            Value::Int(0x40001),
+            Value::Int(0x15),
+        ]);
         let error = vm.dispatch(&instruction, &mut TraceApi).unwrap_err();
-        assert!(error.to_string().contains("[ 262145 ] のスタック領域"), "{error}");
-        vm.stack.extend([Value::Int(4), Value::Int(0x100), Value::Int(0x10), Value::Int(0x80000)]);
+        assert!(
+            error.to_string().contains("[ 262145 ] のスタック領域"),
+            "{error}"
+        );
+        vm.stack.extend([
+            Value::Int(4),
+            Value::Int(0x100),
+            Value::Int(0x10),
+            Value::Int(0x80000),
+        ]);
         let error = vm.dispatch(&instruction, &mut TraceApi).unwrap_err();
         assert!(error.to_string().contains("$80000"), "{error}");
     }
@@ -19640,30 +20352,35 @@ mod tests {
 
     #[test]
     fn exclusive_child_owner_suspends_the_root_interpreter() {
-        let mut vm=Vm::new();
+        let mut vm = Vm::new();
         vm.start(&empty_loaded_program("exclusive-root._bp".into()));
-        vm.exclusive_thread_id=Some(vm.thread.thread_id()+1);
-        let report=vm.run_loaded(&mut TraceApi,&VmRunOptions::default());
-        assert_eq!(report.stop_reason,VmStopReason::WaitingForProcedure);
+        vm.exclusive_thread_id = Some(vm.thread.thread_id() + 1);
+        let report = vm.run_loaded(&mut TraceApi, &VmRunOptions::default());
+        assert_eq!(report.stop_reason, VmStopReason::WaitingForProcedure);
         assert!(!vm.halted);
-        vm.exclusive_thread_id=None;
-        let report=vm.run_loaded(&mut TraceApi,&VmRunOptions::default());
-        assert_eq!(report.stop_reason,VmStopReason::Completed);
+        vm.exclusive_thread_id = None;
+        let report = vm.run_loaded(&mut TraceApi, &VmRunOptions::default());
+        assert_eq!(report.stop_reason, VmStopReason::Completed);
     }
 
     #[test]
     fn sys80_cf_resolves_tagged_raw_input_and_returns_decoded_length() {
-        let mut vm=Vm::new();
-        let source=crate::CODE_SEGMENT|0x1000;
-        let destination=0x2000u32;
-        let at = vm.memory_addr(source) as usize; vm.memory[at..at + 4].copy_from_slice(b"data");
-        vm.stack.extend([Value::Ptr(destination),Value::Ptr(source),Value::Int(4)]);
-        let instruction=test_instruction(0,0x80,"sys1",vec![0x80,0xcf],Vec::new());
-        vm.dispatch(&instruction,&mut TraceApi).unwrap();
+        let mut vm = Vm::new();
+        let source = crate::CODE_SEGMENT | 0x1000;
+        let destination = 0x2000u32;
+        let at = vm.memory_addr(source) as usize;
+        vm.memory[at..at + 4].copy_from_slice(b"data");
+        vm.stack
+            .extend([Value::Ptr(destination), Value::Ptr(source), Value::Int(4)]);
+        let instruction = test_instruction(0, 0x80, "sys1", vec![0x80, 0xcf], Vec::new());
+        vm.dispatch(&instruction, &mut TraceApi).unwrap();
         assert!(vm.stack.is_empty());
-        assert_eq!(&vm.memory[destination as usize..destination as usize+4],b"data");
-        assert_eq!(vm.poll_current_procedure(&mut TraceApi,false),None);
-        assert_eq!(vm.stack,[Value::Int(4)]);
+        assert_eq!(
+            &vm.memory[destination as usize..destination as usize + 4],
+            b"data"
+        );
+        assert_eq!(vm.poll_current_procedure(&mut TraceApi, false), None);
+        assert_eq!(vm.stack, [Value::Int(4)]);
     }
 
     #[test]
@@ -20213,11 +20930,14 @@ mod tests {
         assert_eq!(vm.try_builtin_sys(0x81, 0x0e).unwrap(), Some(Value::None));
         assert_eq!(vm.read_int(0x1000, 2).unwrap(), 0);
 
-        vm.stack.extend([Value::Int(8), Value::Int(1280), Value::Int(720)]);
+        vm.stack
+            .extend([Value::Int(8), Value::Int(1280), Value::Int(720)]);
         assert_eq!(vm.try_builtin_sys(0x81, 0x60).unwrap(), Some(Value::Int(1)));
-        vm.stack.extend([Value::Int(3), Value::Int(0), Value::Int(720)]);
+        vm.stack
+            .extend([Value::Int(3), Value::Int(0), Value::Int(720)]);
         assert_eq!(vm.try_builtin_sys(0x81, 0x60).unwrap(), Some(Value::Int(2)));
-        vm.stack.extend([Value::Int(3), Value::Int(1280), Value::Int(720)]);
+        vm.stack
+            .extend([Value::Int(3), Value::Int(1280), Value::Int(720)]);
         assert_eq!(vm.try_builtin_sys(0x81, 0x60).unwrap(), Some(Value::Int(0)));
 
         vm.stack.push(Value::Int(2));

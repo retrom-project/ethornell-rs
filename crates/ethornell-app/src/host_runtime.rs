@@ -205,16 +205,21 @@ impl HostRuntime {
             return Err(EthornellError::Other("invalid GPU backend".into()));
         }
         let policy = file_policy::FilePolicy::new(&config.resource_root, &config.user_root)?;
-        Self::create_with_policy(config,policy)
+        Self::create_with_policy(config, policy)
     }
     /// Existing network capability; saves and locking stay on the local host.
-    #[cfg(all(fd_policy,any(feature="nfs",feature="smb")))]
-    pub fn create_with_resources(config:HostConfig,directory:game_network::Directory)->Result<Self> {
-        if config.backend>2 {return Err(EthornellError::Other("invalid GPU backend".into()));}
-        let policy=file_policy::FilePolicy::from_network_directory(directory,&config.user_root)?;
-        Self::create_with_policy(config,policy)
+    #[cfg(all(fd_policy, any(feature = "nfs", feature = "smb")))]
+    pub fn create_with_resources(
+        config: HostConfig,
+        directory: game_network::Directory,
+    ) -> Result<Self> {
+        if config.backend > 2 {
+            return Err(EthornellError::Other("invalid GPU backend".into()));
+        }
+        let policy = file_policy::FilePolicy::from_network_directory(directory, &config.user_root)?;
+        Self::create_with_policy(config, policy)
     }
-    fn create_with_policy(config:HostConfig,policy:file_policy::FilePolicy)->Result<Self> {
+    fn create_with_policy(config: HostConfig, policy: file_policy::FilePolicy) -> Result<Self> {
         let writer_lock = policy.lock_writer()?;
         policy.validate_resource_tree().map_err(|e| {
             EthornellError::Other(format!("host_policy:301:{}", e.raw_os_error().unwrap_or(0)))
@@ -227,7 +232,11 @@ impl HostRuntime {
                 ethornell_render::FontProvider::load_file(path, config.font_face_index)?
             }
             (None, None) => {
-                let required = if config.gbk { "A日本語中文简体繁體" } else { "A日本語中文" };
+                let required = if config.gbk {
+                    "A日本語中文简体繁體"
+                } else {
+                    "A日本語中文"
+                };
                 match file_policy::scope(&policy, || game_font::load(&policy.resource, required)) {
                     Some(font) => font,
                     None => ethornell_render::FontProvider::load_system_for_text(required)?,
@@ -313,10 +322,12 @@ impl HostRuntime {
     pub fn scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         let policy = self.policy.clone();
         let font = self.font.clone();
-        file_policy::scope(&policy, || snapshot::with_font(&font, || {
-            let _glyphs = self.runtime.api.glyph_images.enter_session();
-            f(self)
-        }))
+        file_policy::scope(&policy, || {
+            snapshot::with_font(&font, || {
+                let _glyphs = self.runtime.api.glyph_images.enter_session();
+                f(self)
+            })
+        })
     }
     fn sync_audio(&mut self) -> Result<()> {
         let suspended = self.paused != 0
@@ -424,7 +435,10 @@ impl HostRuntime {
     }
     /// Native game dimensions, independent of the host viewport.
     pub fn screen_dimensions(&self) -> (u32, u32) {
-        (self.runtime.api.screen_width.max(1) as u32, self.runtime.api.screen_height.max(1) as u32)
+        (
+            self.runtime.api.screen_width.max(1) as u32,
+            self.runtime.api.screen_height.max(1) as u32,
+        )
     }
     /// One line of state for host-side debugging: the last VM stop, the
     /// engine clock and what the presenter has to draw.
@@ -812,7 +826,9 @@ impl HostRuntime {
         self.sync_audio()
     }
     fn close(&mut self) {
-        if self.closed { return; }
+        if self.closed {
+            return;
+        }
         self.closed = true;
         self.runtime.vm.cancel_host_requests();
         self.runtime.api.host.pending.clear();
@@ -928,11 +944,13 @@ impl RuntimeEngine {
         self.vm.halted
             && self.api.native_system.restart.is_none()
             && self.api.native_system.bootstrap_request.is_none()
-            && self.last_report.as_ref().is_some_and(|report| matches!(
-                report.stop_reason,
-                ethornell_vm::VmStopReason::Completed
-                    | ethornell_vm::VmStopReason::InterpreterTerminated
-            ))
+            && self.last_report.as_ref().is_some_and(|report| {
+                matches!(
+                    report.stop_reason,
+                    ethornell_vm::VmStopReason::Completed
+                        | ethornell_vm::VmStopReason::InterpreterTerminated
+                )
+            })
     }
 
     fn new_explicit(
@@ -987,10 +1005,17 @@ mod tests {
     }
     #[test]
     fn normal_root_completion_respects_children_yields_and_restarts() {
-        let create = |bytes: &[u8]| RuntimeEngine::new_explicit(
-            "root", bytes, ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap(),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")), false, false, encoding_rs::SHIFT_JIS,
-        );
+        let create = |bytes: &[u8]| {
+            RuntimeEngine::new_explicit(
+                "root",
+                bytes,
+                ResourceManager::open_game(env!("CARGO_MANIFEST_DIR")).unwrap(),
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+                false,
+                false,
+                encoding_rs::SHIFT_JIS,
+            )
+        };
         let advance = |runtime: &mut RuntimeEngine| {
             runtime.last_report = Some(runtime.vm.run_loaded(&mut runtime.api, &runtime.options));
         };
@@ -1001,7 +1026,8 @@ mod tests {
             runtime.api.native_system.restart = Some(("".into(), "".into(), None));
             assert!(!runtime.normal_root_completion());
             runtime.api.native_system.restart = None;
-            runtime.api.native_system.bootstrap_request = Some((None, "system.arc".into(), "ipl._bp".into()));
+            runtime.api.native_system.bootstrap_request =
+                Some((None, "system.arc".into(), "ipl._bp".into()));
             assert!(!runtime.normal_root_completion());
         }
         let mut yielding = create(&[0x80, 0x5f, 0x17]);
@@ -1009,8 +1035,8 @@ mod tests {
         assert!(!yielding.normal_root_completion());
         // Child entry at 0x1a returns while the root keeps yielding at 0x14.
         let mut parent = create(&[
-            0x02,4,0,0,0, 0x02,0,1,0,0, 0x02,0,1,0,0,
-            0x06,0x0b,0, 0x81,0x44, 0x80,0x5f, 0x06,0xfe,0xff, 0x14, 0x17,
+            0x02, 4, 0, 0, 0, 0x02, 0, 1, 0, 0, 0x02, 0, 1, 0, 0, 0x06, 0x0b, 0, 0x81, 0x44, 0x80,
+            0x5f, 0x06, 0xfe, 0xff, 0x14, 0x17,
         ]);
         for _ in 0..4 {
             advance(&mut parent);
@@ -1121,13 +1147,19 @@ mod tests {
             PathBuf::from(std::env::var_os("ETHORNELL_RESTRICTED_REPRO_GAME").expect("game copy"));
         // An explicitly supplied private user root permits cross-session
         // save/load repros. The default remains a disposable fresh root.
-        let retained_user = std::env::var_os("ETHORNELL_RESTRICTED_REPRO_USER_ROOT").map(PathBuf::from);
-        let user = retained_user.clone().unwrap_or_else(|| std::env::temp_dir().join(format!(
-            "ethornell-restricted-startup-{}",
-            std::process::id(),
-        )));
-        if retained_user.is_some() { std::fs::create_dir_all(&user).unwrap(); }
-        else { std::fs::create_dir(&user).unwrap(); }
+        let retained_user =
+            std::env::var_os("ETHORNELL_RESTRICTED_REPRO_USER_ROOT").map(PathBuf::from);
+        let user = retained_user.clone().unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "ethornell-restricted-startup-{}",
+                std::process::id(),
+            ))
+        });
+        if retained_user.is_some() {
+            std::fs::create_dir_all(&user).unwrap();
+        } else {
+            std::fs::create_dir(&user).unwrap();
+        }
         let outcome = (|| -> Result<()> {
             let mut host = HostRuntime::create(HostConfig {
                 resource_root: resource,
@@ -1206,7 +1238,9 @@ mod tests {
                 Ok(())
             })
         })();
-        if retained_user.is_none() { std::fs::remove_dir_all(user).unwrap(); }
+        if retained_user.is_none() {
+            std::fs::remove_dir_all(user).unwrap();
+        }
         outcome.unwrap();
     }
 
@@ -1471,11 +1505,8 @@ mod tests {
     fn bootstrap_restart_preserves_session_text_encoding() {
         let (root, mut host) = minimal_host("encoding-restart");
         assert_eq!(host.runtime.vm.graph_text_encoding(), encoding_rs::GBK);
-        host.runtime.api.native_system.bootstrap_request = Some((
-            None,
-            "system.arc".into(),
-            "ipl._bp".into(),
-        ));
+        host.runtime.api.native_system.bootstrap_request =
+            Some((None, "system.arc".into(), "ipl._bp".into()));
         let restarted = host.runtime.take_restart().unwrap();
         assert_eq!(restarted.vm.graph_text_encoding(), encoding_rs::GBK);
         drop(restarted);
