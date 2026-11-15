@@ -28,6 +28,12 @@ jobs:
           echo "9687f3bb551b9f66f37ed32a40d7913a00f7962db653054e56857bc306c3227f  $RUNNER_TEMP/bindgen.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/bindgen.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/wasm-bindgen-0.2.130-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+      - name: Install pinned host regression browser
+        run: |
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/retrom-browsers"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
+          npm ci --prefix platform/retrom
+          npm exec --prefix platform/retrom -- playwright-core install --with-deps chromium
       - name: Test release identity and native parsers
         run: |
           python3 -m unittest discover -s tools -p 'test_retrom_*.py'

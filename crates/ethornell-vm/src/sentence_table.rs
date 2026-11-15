@@ -21,11 +21,14 @@ impl SentenceTable {
         for _ in 0..count {
             let group=r.text()?;let count=r.u32()? as usize;total=total.checked_add(count)?;if total>MAX_ENTRIES {return None;}
             let mut entries=BTreeMap::new();
-            for _ in 0..count {let key=r.text()?;let text=r.text()?;if entries.insert(key,text).is_some(){return None;}}
-            if table.groups.insert(group,entries).is_some(){return None;}
+            for _ in 0..count {let key=r.text()?;let text=r.text()?;entries.insert(key,text);}
+            table.groups.insert(group,entries);
         }
         if r.p!=bytes.len(){return None;}
         Some(table)
+    }
+    pub(crate) fn merge(&mut self, incoming: Self) {
+        self.groups.extend(incoming.groups);
     }
     pub(crate) fn get(&self,group:&str,key:&str)->Option<&str>{self.groups.get(group)?.get(key).map(String::as_str)}
     pub(crate) fn valid_size(length:usize)->bool {length<=MAX_BYTES}
@@ -38,7 +41,24 @@ mod tests {
     #[test]
     fn parses_original_utf8_groups_without_global_numeric_replacement(){let b=fixture();let t=SentenceTable::parse(&b).unwrap();assert_eq!(t.get("section","000000"),Some("原创测试正文"));assert_eq!(t.get("other","000000"),None);assert_eq!(t.get("section","missing"),None);}
     #[test]
-    fn truncation_invalid_utf8_counts_duplicate_and_trailing_bytes_are_rejected(){let b=fixture();for n in 0..b.len(){assert!(SentenceTable::parse(&b[..n]).is_none());}let mut bad=b.clone();bad.push(0);assert!(SentenceTable::parse(&bad).is_none());let mut bad=b.clone();bad[4]=0xff;assert!(SentenceTable::parse(&bad).is_none());let mut bad=b.clone();bad[..4].copy_from_slice(&u32::MAX.to_le_bytes());assert!(SentenceTable::parse(&bad).is_none());let mut bad=b.clone();let start=bad.windows(6).position(|w|w==b"000001").unwrap();bad[start..start+6].copy_from_slice(b"000000");assert!(SentenceTable::parse(&bad).is_none());assert!(!SentenceTable::valid_size(MAX_BYTES+1));}
+    fn truncation_invalid_utf8_counts_and_trailing_bytes_are_rejected(){let b=fixture();for n in 0..b.len(){assert!(SentenceTable::parse(&b[..n]).is_none());}let mut bad=b.clone();bad.push(0);assert!(SentenceTable::parse(&bad).is_none());let mut bad=b.clone();bad[4]=0xff;assert!(SentenceTable::parse(&bad).is_none());let mut bad=b.clone();bad[..4].copy_from_slice(&u32::MAX.to_le_bytes());assert!(SentenceTable::parse(&bad).is_none());assert!(!SentenceTable::valid_size(MAX_BYTES+1));}
+    #[test]
+    fn duplicate_keys_keep_the_last_value_and_groups_replace_as_units() {
+        let mut bytes=fixture();
+        let at=bytes.windows(6).position(|part|part==b"000001").unwrap();
+        bytes[at..at+6].copy_from_slice(b"000000");
+        let mut table=SentenceTable::parse(&bytes).unwrap();
+        assert_eq!(table.get("section","000000"),Some("second"));
+        assert_eq!(table.get("section","000001"),None);
+        let mut empty=1u32.to_le_bytes().to_vec();
+        empty.extend_from_slice(b"section\0");empty.extend_from_slice(&0u32.to_le_bytes());
+        table.merge(SentenceTable::parse(&empty).unwrap());
+        assert_eq!(table.get("section","000000"),None);
+        let mut duplicate=fixture();duplicate[..4].copy_from_slice(&2u32.to_le_bytes());
+        duplicate.extend_from_slice(&empty[4..]);
+        assert_eq!(SentenceTable::parse(&duplicate).unwrap().get("section","000000"),None);
+    }
+
     #[test]
     fn arbitrary_small_inputs_do_not_panic(){let mut seed=1u32;for len in 0..512 {let mut b=vec![0;len];for v in &mut b{seed=seed.wrapping_mul(1664525).wrapping_add(1013904223);*v=(seed>>24)as u8;}let _=SentenceTable::parse(&b);}}
 }

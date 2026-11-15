@@ -108,6 +108,22 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     run("npm", "ci", "--prefix", "platform/retrom")
     run("npm", "test", "--prefix", "platform/retrom")
+    presentation_test = ROOT / "build/retrom/graph-presentation-tests"
+    presentation_test.parent.mkdir(parents=True, exist_ok=True)
+    run("rustc", "--edition=2024", "--test", "crates/ethornell-app/src/graph_presentation.rs", "-o", str(presentation_test))
+    run(str(presentation_test))
+    layout_test = ROOT / "build/retrom/text-layout-tests"
+    run("rustc", "--edition=2024", "--test", "crates/ethornell-app/src/text_layout.rs", "-o", str(layout_test))
+    run(str(layout_test))
+    probe_test = ROOT / "build/retrom/native-utf8-probe-tests"
+    run("rustc", "--edition=2024", "--test", "crates/ethornell-vm/src/native_utf8_probe.rs", "-o", str(probe_test))
+    run(str(probe_test))
+    catalog_test = ROOT / "build/retrom/font-catalog-tests"
+    run("rustc", "--edition=2024", "--test", "crates/ethornell-vm/src/font_catalog.rs", "-o", str(catalog_test))
+    run(str(catalog_test))
+    glyph_profile_test = ROOT / "build/retrom/native-glyph-bridge-tests"
+    run("rustc", "--edition=2024", "--test", "crates/ethornell-app/src/native_glyph_bridge.rs", "-o", str(glyph_profile_test))
+    run(str(glyph_profile_test))
     source = tree_digest()
     font_root = ROOT / "dist/retrom-inputs/font"
     font = font_root / "NotoSansSC.ttf"
@@ -121,6 +137,7 @@ def main():
     if subprocess.check_output([bindgen, "--version"]).decode().strip() != "wasm-bindgen 0.2.130":
         raise ValueError("ETHORNELL_WASM_BINDGEN_VERSION_MISMATCH")
     run(bindgen, str(ROOT / "target/wasm32-unknown-unknown/release/ethornell_web.wasm"), "--target", "web", "--out-dir", str(ROOT / "build/retrom/pkg"))
+    run("npm", "run", "test:host", "--prefix", "platform/retrom")
     esbuild = str(ROOT / "platform/retrom/node_modules/.bin/esbuild")
     for entry, name in [("bridge.mjs", "ethornell.mjs"), ("worker.mjs", "ethornell-worker.mjs")]:
         run(esbuild, "platform/retrom/" + entry, "--bundle", "--format=esm", "--target=es2022", "--legal-comments=inline", "--minify", "--banner:js=/*! Ethornell: MPL-2.0; see THIRD-PARTY-NOTICES.md and corresponding source. */", f"--outfile={output / name}")

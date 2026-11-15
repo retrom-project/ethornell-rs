@@ -168,7 +168,10 @@ impl TextLayoutDefaults {
 
     pub(crate) fn set_scale_divisor(&mut self, divisor: i32) -> bool {
         if divisor == 0 {
-            return false;
+            // Modern 408860 accepts zero, clears the reciprocal and selects
+            // natural glyph metrics instead of a fixed advance divisor.
+            self.scale_reciprocal_16_16 = 0;
+            return true;
         }
         // sub_407B60 divides unsigned.
         self.scale_reciprocal_16_16 =

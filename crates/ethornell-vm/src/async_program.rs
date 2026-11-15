@@ -88,6 +88,7 @@ impl Vm {
         let mut vm = Vm::with_buffers(Vec::new(), Vec::new());
         vm.native_abi_profile = self.native_abi_profile;
         vm.modern_pointer_tags = self.modern_pointer_tags;
+        vm.unicode_glyph_bridge = self.unicode_glyph_bridge;
         vm.graph_text_encoding = self.graph_text_encoding;
         vm.system80_shared = Arc::clone(&self.system80_shared);
         vm.system81_shared = Arc::clone(&self.system81_shared);

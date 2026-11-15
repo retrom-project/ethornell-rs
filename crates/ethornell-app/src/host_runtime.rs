@@ -132,7 +132,7 @@ impl HostServices {
         self.events.push_back(HostEvent {kind:1,request_id:0,code:1001,text:format!("input_route object={object} group={group} item={item} root={root} flags={flags} current={current} pending={pending} pointer={} hit={} press={} up={} event6={}",u32::from(pointer),u32::from(hit),u32::from(press),u32::from(up),u32::from(event6))});
     }
     pub(super) fn unsupported(&mut self, capability: &str) {
-        if !self.enabled {
+        if !self.enabled || self.fatal.is_some() {
             return;
         }
         self.fatal = Some(format!(
@@ -313,7 +313,10 @@ impl HostRuntime {
     pub fn scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         let policy = self.policy.clone();
         let font = self.font.clone();
-        file_policy::scope(&policy, || snapshot::with_font(&font, || f(self)))
+        file_policy::scope(&policy, || snapshot::with_font(&font, || {
+            let _glyphs = self.runtime.api.glyph_images.enter_session();
+            f(self)
+        }))
     }
     fn sync_audio(&mut self) -> Result<()> {
         let suspended = self.paused != 0
@@ -950,6 +953,7 @@ impl RuntimeEngine {
         );
         vm.set_native_abi_profile(profile.abi);
         vm.set_modern_pointer_tags(profile.modern_pointer_tags);
+        vm.set_unicode_glyph_bridge(profile.unicode_glyph_bridge);
         vm.set_graph_text_encoding(encoding);
         vm.start(&program);
         Self {

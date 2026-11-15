@@ -32,6 +32,9 @@ pub mod native_motion;
 pub mod native_ownership;
 pub mod native_selection;
 mod native_strings;
+mod native_encoding;
+mod font_catalog;
+mod native_utf8_probe;
 pub mod native_thread;
 mod procedure_class_map;
 mod profile;
@@ -1890,6 +1893,14 @@ fn target_dialog_max_bytes(value: i32, capacity: usize) -> usize {
     }
 }
 
+/// Renderable logical families and their Windows charset capabilities.
+#[derive(Debug, Clone)]
+pub struct FontFamily {
+    pub name: String,
+    pub charsets: Vec<u8>,
+    pub pitch_and_family: u8,
+}
+
 pub trait SoundApi {
     fn call_sound(&mut self, call: &mut NativeCallFrame) -> VmResult<Value>;
 
@@ -1933,6 +1944,11 @@ pub trait SoundApi {
     /// Keep the list stable between the size query and the buffer write.
     fn user_font_families(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn user_font_catalog(&self) -> Vec<FontFamily> {
+        self.user_font_families().into_iter()
+            .map(|name| FontFamily { name, charsets: vec![128], pitch_and_family: 2 }).collect()
     }
 
     fn show_user_dialog(&mut self, _request: UserDialogRequest) -> Option<UserDialogResponse> {
@@ -2358,6 +2374,7 @@ fn placeholder_loaded_program(
 pub struct Vm {
     native_abi_profile: NativeAbiProfile,
     modern_pointer_tags: bool,
+    unicode_glyph_bridge: bool,
     trace_id: u64,
     pending_host_request: Option<host_request::PendingHostRequest>,
     ready_host_response: Option<HostResponse>,
@@ -4359,11 +4376,25 @@ impl Vm {
                 let id = instruction.raw.get(1).copied().unwrap_or_default() as u16;
                 self.note_call("graph", code, id);
                 api.observe_dispatch(NativeOpcode { group: code, id });
-                if fail_on_stub
-                    && !self.effective_strict_support(NativeOpcode { group: code, id })
+                // 91:00 is null in the base graphics table. Keep it unknown
+                // even when permissive dispatch allows other recovered calls.
+                if ((code, id) == (0x91, 0x00)
+                    && self.native_abi_profile != NativeAbiProfile::Anipani)
+                    || (fail_on_stub
+                        && !self.effective_strict_support(NativeOpcode { group: code, id }))
                 {
                     self.note_stub("graph", code, id);
                     return Err(VmError::UnknownDispatch { group: code, id });
+                }
+                if (code, id) == (0x92, 0x98) {
+                    if let Some(operand) = self.operand_from_top(5) {
+                        let raw = self.operand_value(operand).as_i32();
+                        let normalized = self.native_glyph_registration_code(raw);
+                        if normalized < 0 && self.native_abi_profile != NativeAbiProfile::Anipani && !self.unicode_glyph_bridge {
+                            return Err(VmError::Runtime(format!("無効な文字コード [ {normalized} ] が指定されました")));
+                        }
+                        self.replace_operand(operand, Value::Int(normalized));
+                    }
                 }
                 let result = if (code, id) == (0x92, 0x0e) && matches!(self.native_abi_profile, NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern) {
                     let pointer = self.pop_ptr()?;
@@ -5704,20 +5735,61 @@ impl Vm {
                 let id = instruction.raw.get(1).copied().unwrap_or_default() as u16;
                 self.note_call("user", code, id);
                 api.observe_dispatch(NativeOpcode { group: code, id });
-                if fail_on_stub
-                    && !native_call::is_strictly_supported(NativeOpcode { group: code, id })
+                if ((code, id) == (0xb0, 0xc5)
+                    && self.native_abi_profile != NativeAbiProfile::Anipani)
+                    || (fail_on_stub
+                        && !self.effective_strict_support(NativeOpcode { group: code, id }))
                 {
                     self.note_stub("user", code, id);
                     return Err(VmError::UnknownDispatch { group: code, id });
                 }
-                if api.host_requests_enabled()
+                let vm_owned_extension = self.native_abi_profile == NativeAbiProfile::Anipani
+                    && matches!((code, id), (0xb0, 0xc5 | 0xc6));
+                if api.host_requests_enabled() && !vm_owned_extension
                     && self.intercept_native_host_request(api, NativeOpcode { group: code, id })?
                 {
                     self.pc = next_pc;
                     return Ok(());
                 }
-                self.normalize_user_string_args(code, id)?;
-                let direct_result = if (code, id) == (0xb0, 0xc4) {
+                if !(self.native_abi_profile == NativeAbiProfile::Anipani && (code, id) == (0xb0, 0xc6)) {
+                    self.normalize_user_string_args(code, id)?;
+                }
+                let direct_result = if self.native_abi_profile == NativeAbiProfile::Anipani
+                    && matches!((code, id), (0xb0, 0xc4 | 0xc5))
+                {
+                    let charset = if id == 0xc5 { self.pop_int()? } else { 128 };
+                    let destination = self.pop_ptr()?;
+                    let records = api.user_font_catalog().into_iter().map(|font| {
+                        font_catalog::NativeFontFamily {
+                            name: self.encode_native_string(&font.name).into_owned(),
+                            charsets: font.charsets,
+                        }
+                    }).collect::<Vec<_>>();
+                    let (bytes, count) = font_catalog::serialize_native_records(&records, charset);
+                    let result = if destination == 0 { bytes.len() } else {
+                        let range = self.resolve_write_range(destination, bytes.len())?;
+                        self.memory[range].copy_from_slice(&bytes);
+                        self.clear_shadow_values(destination, bytes.len());
+                        count
+                    };
+                    Some(Value::Int(result as i32))
+                } else if self.native_abi_profile == NativeAbiProfile::Anipani && (code, id) == (0xb0, 0xc6) {
+                    let name = self.pop_value()?;
+                    let destination = self.pop_ptr()?;
+                    let name = self.native_auto_string(name)?.to_lowercase();
+                    let catalog = api.user_font_catalog();
+                    let matched = [128, 136, 134, 0].iter().find_map(|charset| {
+                        catalog.iter().find(|font| font.charsets.contains(charset)
+                            && font.name.to_lowercase() == name)
+                    });
+                    let result = if let Some(font) = matched {
+                        if destination == 0 { return Err(VmError::Runtime("font pitch output is null".into())); }
+                        self.write_int(destination, 2, u32::from(font.pitch_and_family & 3))?;
+                        self.clear_shadow_values(destination, 4);
+                        1
+                    } else { 0 };
+                    Some(Value::Int(result))
+                } else if (code, id) == (0xb0, 0xc4) {
                     // sub_479D60 -> sub_4694B0 -> sub_42DEB0/sub_42F030:
                     // null queries the byte count, including each terminator.
                     // A buffer receives consecutive C strings and returns
@@ -6805,6 +6877,17 @@ impl Vm {
     pub fn set_modern_pointer_tags(&mut self, enabled: bool) {
         self.modern_pointer_tags = enabled;
     }
+    pub fn set_unicode_glyph_bridge(&mut self, enabled: bool) {
+        self.unicode_glyph_bridge = enabled;
+        for task in &mut self.async_tasks { task.vm.set_unicode_glyph_bridge(enabled); }
+    }
+
+    fn native_glyph_registration_code(&self, code: i32) -> i32 {
+        if self.unicode_glyph_bridge && self.native_utf8_enabled() {
+            code | i32::MIN
+        } else { code }
+    }
+
     fn bp_frame_tag(&self) -> u32 { if self.modern_pointer_tags { 0x2000_0000 } else { FRAME_SEGMENT } }
     fn bp_code_tag(&self) -> u32 { if self.modern_pointer_tags { 0x1000_0000 } else { CODE_SEGMENT } }
 
@@ -6827,11 +6910,15 @@ impl Vm {
             && matches!((opcode.group, opcode.id), (0x81, 0x00) | (0x91, 0x09) | (0x92, 0x99))
         { return true; }
         if self.native_abi_profile==NativeAbiProfile::Amachoco && opcode.group==0x81 && matches!(opcode.id,0x21|0xD8|0xDA) {return true;}
-        if self.native_abi_profile == NativeAbiProfile::Anipani && opcode.group == 0x91 && matches!(opcode.id, 0x09 | 0x0a) { return true; }
+        if self.native_abi_profile == NativeAbiProfile::Anipani
+            && (matches!((opcode.group, opcode.id), (0x81, 0x00 | 0x21 | 0x27 | 0xd8 | 0xda))
+                || (opcode.group == 0x91 && matches!(opcode.id, 0x00 | 0x09 | 0x0a))) { return true; }
         if matches!(self.native_abi_profile, NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern)
             && matches!((opcode.group, opcode.id), (0x81, 0x00..=0x03) | (0x91, 0x05 | 0x09..=0x0a) | (0x92, 0x0e | 0x95 | 0x99))
         { return true; }
-        if self.native_abi_profile == NativeAbiProfile::Modern && (opcode.group, opcode.id) == (0x92, 0x0f) { return true; }
+        if self.native_abi_profile == NativeAbiProfile::Modern
+            && (opcode.group, opcode.id) == (0x92, 0x0f) { return true; }
+        if self.native_abi_profile == NativeAbiProfile::Anipani && (opcode.group, opcode.id) == (0xb0, 0xc5) { return true; }
         native_call::is_strictly_supported(opcode)
     }
 
@@ -9335,7 +9422,7 @@ impl Vm {
         id: u16,
     ) -> VmResult<Option<Value>> {
         let result = match (group, id) {
-            (0x81, 0x00) if matches!(self.native_abi_profile, NativeAbiProfile::Amachoco | NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern) => {
+            (0x81, 0x00) if matches!(self.native_abi_profile, NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani | NativeAbiProfile::HoukagoFd | NativeAbiProfile::Modern) => {
                 // sub_494EF0 -> sub_49EA60: 0 selects CP932, 1 selects UTF-8.
                 let mode = self.pop_int()?;
                 let valid = (0..=1).contains(&mode);
@@ -9574,24 +9661,8 @@ impl Vm {
                     .message_auxiliary_input_mask = mask;
                 Value::None
             }
-            (0x81, 0x21) => {
-                if self.native_abi_profile!=NativeAbiProfile::Amachoco {return Ok(None);}
-                // amachoco.exe's sub_4953A0 pops source then destination and
-                // converts the source from CP932 to UTF-8. Retain the decoded
-                // string as a shadow value so later BP copies and graph calls
-                // do not lose it by treating the pointer as an integer.
-                let source = self.pop_value()?;
-                let destination = self.pop_ptr()?;
-                let text = self.value_as_native_string_lossy(source)?;
-                let bytes=text.as_bytes();
-                let range=self.resolve_write_range(destination,bytes.len()+1)?;
-                self.memory[range.start..range.start+bytes.len()].copy_from_slice(bytes);
-                self.memory[range.start+bytes.len()]=0;
-                self.clear_shadow_values(destination,bytes.len()+1);
-                self.mem_values
-                    .insert(self.value_key(destination), Value::Str(text));
-                Value::None
-            }
+            (0x81, 0x21) if matches!(self.native_abi_profile, NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani) => self.sys81_convert_cp932()?,
+            (0x81, 0x27) if self.native_abi_profile == NativeAbiProfile::Anipani => self.sys81_probe_utf8()?,
             (0x81, 0x28) => self.sys81_open_stream(api)?,
             (0x81, 0x29) => self.sys81_close_stream()?,
             (0x81, 0x2a) => self.sys81_transfer_stream(api)?,
@@ -10183,45 +10254,8 @@ impl Vm {
                     }
                 }
             }
-            (0x81, 0xda) => {
-                if self.native_abi_profile!=NativeAbiProfile::Amachoco {return Ok(None);}
-                // Confirmed ac_chinese.exe497340 ->4A47B0: resolve group/key,
-                // optionally copy UTF-8 including NUL, return payload bytes
-                // excluding NUL. A null destination is a length query.
-                let text = self.pop_value()?;
-                let keyword = self.pop_value()?;
-                let destination = self.pop_ptr()?;
-                let key=self.value_as_native_string_lossy(text)?;
-                let group=self.value_as_native_string_lossy(keyword)?;
-                let replacement=self.system81_shared.lock().map_err(|_|VmError::Runtime("sentence table state poisoned".into()))?.sentence_table.get(&group,&key).map(str::to_owned);
-                if let Some(replacement)=replacement {
-                    let bytes=replacement.as_bytes();let length=bytes.len();
-                    if destination!=0 {
-                        let range=self.resolve_write_range(destination,length+1)?;
-                        self.memory[range.start..range.start+length].copy_from_slice(bytes);self.memory[range.start+length]=0;
-                        self.clear_shadow_values(destination,length+1);self.mem_values.insert(self.value_key(destination),Value::Str(replacement));
-                    }
-                    Value::Int(length as i32)
-                } else {Value::Int(0)}
-            }
-            (0x81,0xd8) if self.native_abi_profile==NativeAbiProfile::Amachoco => {
-                // The confirmed later script consumes (bytes,length) and one
-                // result, unlike the default executable's unregistered slot.
-                // Only install a fully validated table; malformed data returns
-                // failure and leaves prior shared registrations unchanged.
-                let length=self.pop_int()?;
-                let pointer=self.pop_ptr()?;
-                if length==0 && pointer==0 {
-                    self.system81_shared.lock().map_err(|_|VmError::Runtime("sentence table state poisoned".into()))?.sentence_table=sentence_table::SentenceTable::default();
-                    Value::Int(1)
-                } else if length<0 || !sentence_table::SentenceTable::valid_size(length as usize) {Value::Int(0)} else {
-                    let bytes=self.resolve_range(pointer,length as usize)?;
-                    if let Some(table)=sentence_table::SentenceTable::parse(&self.memory[bytes]) {
-                        self.system81_shared.lock().map_err(|_|VmError::Runtime("sentence table state poisoned".into()))?.sentence_table=table;
-                        Value::Int(1)
-                    } else {Value::Int(0)}
-                }
-            }
+            (0x81, 0xda) if matches!(self.native_abi_profile, NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani) => self.sys81_sentence_lookup()?,
+            (0x81, 0xd8) if matches!(self.native_abi_profile, NativeAbiProfile::Amachoco | NativeAbiProfile::Anipani) => self.sys81_sentence_import()?,
             (0x81, 0xe0) => {
                 // sub_48CFE0 -> sub_472A10(current dir, message, exit code,
                 // dir, command, show, hide main window, wait, retry). The
@@ -17158,6 +17192,99 @@ mod tests {
         .unwrap();
 
         assert_eq!(vm.read_c_string(destination).unwrap(), "シナリオの台詞");
+    }
+
+    #[test]
+    fn sentence_import_preserves_other_groups_and_null_clears_regardless_of_length() {
+        let mut vm = Vm::new();
+        vm.set_native_abi_profile(super::NativeAbiProfile::Amachoco);
+        for group in ["first", "second"] {
+            let mut bytes = 1u32.to_le_bytes().to_vec();
+            bytes.extend_from_slice(group.as_bytes()); bytes.push(0);
+            bytes.extend_from_slice(&1u32.to_le_bytes()); bytes.extend_from_slice(b"key\0value\0");
+            vm.memory[0x3000..0x3000 + bytes.len()].copy_from_slice(&bytes);
+            vm.stack = vec![Value::Ptr(0x3000), Value::Int(bytes.len() as i32)];
+            assert_eq!(vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0xd8).unwrap(), Some(Value::Int(1)));
+        }
+        {
+            let state = vm.system81_shared.lock().unwrap();
+            assert_eq!(state.sentence_table.get("first", "key"), Some("value"));
+            assert_eq!(state.sentence_table.get("second", "key"), Some("value"));
+        }
+        vm.stack = vec![Value::Ptr(0), Value::Int(-1)];
+        assert_eq!(vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0xd8).unwrap(), Some(Value::Int(1)));
+        assert_eq!(vm.system81_shared.lock().unwrap().sentence_table.get("second", "key"), None);
+    }
+
+    #[test]
+    fn glyph_code_bridge_depends_on_capability_and_current_encoding() {
+        let mut vm = Vm::new();
+        vm.set_native_abi_profile(super::NativeAbiProfile::Anipani);
+        for (capability, mode, input, expected) in [
+            (false, 1, 0xf001, 0xf001),
+            (true, 0, 0xf001, 0xf001),
+            (true, 1, 0xf001, 0x8000_f001u32 as i32),
+            (true, 1, 0xff01, 0x8000_ff01u32 as i32),
+            (true, 1, 0x8000_f001u32 as i32, 0x8000_f001u32 as i32),
+        ] {
+            vm.set_unicode_glyph_bridge(capability);
+            vm.stack = vec![Value::Int(mode)];
+            vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0).unwrap();
+            assert_eq!(vm.native_glyph_registration_code(input), expected);
+        }
+    }
+
+    #[test]
+    fn font_pitch_lookup_rejects_null_only_when_a_face_matches() {
+        let mut vm = Vm::new();
+        vm.set_native_abi_profile(super::NativeAbiProfile::Anipani);
+        let mut api = SchedulingApi { font_families: vec!["Owned Test".into()], ..SchedulingApi::default() };
+        let instruction = test_instruction(0, 0xb0, "usr1", vec![0xb0, 0xc6], Vec::new());
+        vm.stack = vec![Value::Ptr(0), Value::Str("missing".into())];
+        vm.dispatch(&instruction, &mut api).unwrap();
+        assert_eq!(vm.stack, [Value::Int(0)]);
+        vm.stack = vec![Value::Ptr(0), Value::Str("OWNED TEST".into())];
+        assert!(vm.dispatch(&instruction, &mut api).is_err());
+    }
+
+    #[test]
+    fn cp932_conversion_null_destination_does_not_write_guest_memory() {
+        let mut vm = Vm::new();
+        vm.set_native_abi_profile(super::NativeAbiProfile::Anipani);
+        vm.memory[..4].copy_from_slice(&[1, 2, 3, 4]);
+        vm.stack = vec![Value::Ptr(0), Value::Str("日本".into())];
+        assert_eq!(vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0x21).unwrap(), Some(Value::None));
+        assert_eq!(&vm.memory[..4], &[1, 2, 3, 4]);
+        assert!(vm.stack.is_empty());
+    }
+
+    #[test]
+    fn sentence_lookup_decodes_raw_utf8_in_cp932_mode_and_distinguishes_empty_from_missing() {
+        let mut vm = Vm::new();
+        vm.set_native_abi_profile(super::NativeAbiProfile::Anipani);
+        let mut bytes = 1u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice("日本\0".as_bytes()); bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(b"key\0\0");
+        vm.system81_shared.lock().unwrap().sentence_table = super::sentence_table::SentenceTable::parse(&bytes).unwrap();
+        vm.memory[0x3000..0x3007].copy_from_slice("日本\0".as_bytes());
+        vm.memory[0x3100] = 77;
+        for (key, expected) in [("missing", 77), ("key", 0)] {
+            vm.stack = vec![Value::Ptr(0x3100), Value::Ptr(0x3000), Value::Str(key.into())];
+            assert_eq!(vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0xda).unwrap(), Some(Value::Int(0)));
+            assert_eq!(vm.memory[0x3100], expected);
+        }
+    }
+
+    #[test]
+    fn cp932_conversion_ignores_the_current_utf8_mode() {
+        let mut vm = Vm::new();
+        vm.set_native_abi_profile(super::NativeAbiProfile::Amachoco);
+        // C2 A2 is valid UTF-8 for cent, but CP932 means two halfwidth glyphs.
+        vm.memory[0x3000..0x3003].copy_from_slice(&[0xc2, 0xa2, 0]);
+        vm.stack = vec![Value::Int(123), Value::Ptr(0x3100), Value::Ptr(0x3000)];
+        assert_eq!(vm.try_builtin_sys_with_api(&mut TraceApi, 0x81, 0x21).unwrap(), Some(Value::None));
+        assert_eq!(&vm.memory[0x3100..0x3107], &[0xef, 0xbe, 0x82, 0xef, 0xbd, 0xa2, 0]);
+        assert_eq!(vm.stack, [Value::Int(123)]);
     }
 
     #[test]

@@ -31,6 +31,24 @@ pub enum NativeAbiProfile {
 }
 
 pub fn lookup_profile(profile: NativeAbiProfile, group:u8, id:u16)->Option<NativeCallAbi> {
+    if profile == NativeAbiProfile::Anipani && group == 0xb0 && matches!(id, 0xc5 | 0xc6) {
+        return Some(NativeCallAbi { argc: 2, stack_outputs: 1, installs_procedure: false, raw_descriptor_bit8: true });
+    }
+    if profile == NativeAbiProfile::Anipani && group == 0x81 {
+        let (argc, stack_outputs) = match id {
+            0x00 | 0x27 => (1, 1),
+            0x21 => (2, 0),
+            0xd8 => (2, 1),
+            0xda => (3, 1),
+            _ => return lookup(group, id),
+        };
+        return Some(NativeCallAbi { argc, stack_outputs, installs_procedure: false, raw_descriptor_bit8: stack_outputs != 0 });
+    }
+    if profile == NativeAbiProfile::Anipani && (group, id) == (0x91, 0x00) {
+        // Extended legacy 48A540 / 48BD60: pop one raw force-present
+        // integer, with no BP result or cooperative procedure.
+        return Some(NativeCallAbi { argc: 1, stack_outputs: 0, installs_procedure: false, raw_descriptor_bit8: false });
+    }
     if profile == NativeAbiProfile::Anipani && group == 0x91 && matches!(id, 0x09 | 0x0a) {
         // Legacy extended table: 48A600 pops value then key, calls
         // 401EC0 -> 408840, and pushes success. Both raster option keys are

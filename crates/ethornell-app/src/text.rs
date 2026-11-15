@@ -116,6 +116,7 @@ pub(crate) struct RuntimeFormattedTextLayout {
     ruby_height: f32,
     ruby_x_offset: f32,
     ruby_y_offset: f32,
+    ruby_effect_inset: (f32, f32),
 }
 
 impl RuntimeFormattedTextLayout {
@@ -126,6 +127,7 @@ impl RuntimeFormattedTextLayout {
             ruby_height: 0.0,
             ruby_x_offset: 0.0,
             ruby_y_offset: 0.0,
+            ruby_effect_inset: (0.0, 0.0),
         }
     }
 }
@@ -391,6 +393,8 @@ impl RuntimeTraceApi {
             spacing: self.graph_defaults.text_layout.character_spacing as f32,
             pitch_percent,
             kinsoku,
+            kinsoku_margin: self.graph_config.text_kinsoku_margin(size as i32) as f32,
+            hanging_ignores_margin: self.graph_config.text_hanging_ignores_margin(),
             indent_brackets: self.graph_defaults.text_layout.mode_flag != 0,
         };
         let transform = self.named_font_transform_for_id(font);
@@ -1218,7 +1222,13 @@ impl RuntimeTraceApi {
             }
             None => (0, next),
         };
-        let (parsed, map) = wrap_parsed_message(markup.clone(), &state);
+        let (parsed, map) = wrap_parsed_message(
+            markup.clone(),
+            &state,
+            self.graph_config
+                .text_kinsoku_margin(state.font_size as i32) as f32,
+            self.graph_config.text_hanging_ignores_margin(),
+        );
         self.system92_text_fragment_records = link_fragment_records(&parsed, &state);
         let committed_chars = map.get(page_chars).copied().unwrap_or_default();
         let (cursor_x, cursor_y) = message_end_cursor(&parsed.text, &state);
@@ -1252,12 +1262,16 @@ impl RuntimeTraceApi {
         // `92:9F` stores dword_507650; -1 leaves link glyphs uncoloured.
         let link_color = (self.system92_text_render_override != -1)
             .then(|| (self.system92_text_render_override as u32) & 0x00ff_ffff);
-        let parsed = parse_and_wrap_with_registry(
-            text,
+        let parsed =
+            parse_message_markup_with(text, &mut self.graph_defaults.ruby_registry, link_color);
+        let parsed = wrap_parsed_message(
+            parsed,
             state,
-            &mut self.graph_defaults.ruby_registry,
-            link_color,
-        );
+            self.graph_config
+                .text_kinsoku_margin(state.font_size as i32) as f32,
+            self.graph_config.text_hanging_ignores_margin(),
+        )
+        .0;
         self.system92_text_fragment_records = link_fragment_records(&parsed, state);
         parsed
     }
@@ -1430,6 +1444,18 @@ impl RuntimeTraceApi {
         .max(4) as f32;
         let ruby_x_offset = self.graph_defaults.text_style.ruby_x_offset as f32;
         let ruby_y_offset = self.graph_defaults.text_style.ruby_y_offset as f32;
+        let (dx, dy) = match self.text_node_shadow(node) {
+            crate::snapshot::TextNodeShadow::Message(Some(effect)) => (effect.dx, effect.dy),
+            crate::snapshot::TextNodeShadow::Default(Some((x_percent, y_percent, _))) => {
+                let height = node.size.max(0.0) as i32;
+                (
+                    height.wrapping_mul(x_percent) / 100,
+                    height.wrapping_mul(y_percent) / 100,
+                )
+            }
+            _ => (0, 0),
+        };
+        let ruby_effect_inset = self.graph_config.text_ruby_effect_inset(dx, dy);
         let apply_y_offset = self
             .graph_config
             .text_global_properties
@@ -1443,6 +1469,7 @@ impl RuntimeTraceApi {
             ruby_height,
             ruby_x_offset,
             ruby_y_offset,
+            ruby_effect_inset,
         }
     }
 
@@ -1451,6 +1478,11 @@ impl RuntimeTraceApi {
         class: ethornell_vm::NativeMessageProcedureClass,
         display_object: i32,
     ) -> ethornell_vm::NativeMessageProcedureConfig {
+        // Native 91:9A 80000006 restores the saved window background and
+        // redraws all eligible glyphs (43E2A0). Retained text nodes and the
+        // compositor already rederive that image on every frame; TextRuntime
+        // advances from elapsed engine milliseconds, matching the absolute
+        // clock path selected by 80000000 OR 80000006.
         ethornell_vm::NativeMessageProcedureConfig {
             class,
             initial_delay_enabled: self.graph_defaults.message_delay_enabled,
@@ -1822,6 +1854,10 @@ impl RuntimeTraceApi {
 
     fn apply_text_to_node(&mut self, target: i32, text: String) {
         let state = self.text_state.clone();
+        let margin = self
+            .graph_config
+            .text_kinsoku_margin(state.font_size as i32) as f32;
+        let hanging = self.graph_config.text_hanging_ignores_margin();
         let node = self
             .text_nodes
             .entry(target)
@@ -1846,7 +1882,7 @@ impl RuntimeTraceApi {
             node.enabled = true;
             return;
         }
-        node.text = wrap_text_to_state(&text, &state);
+        node.text = wrap_text_to_state_with_map(&text, &[], &state, margin, hanging).0;
         node.enabled = true;
         node.x = if state.x > 0.0 { state.x } else { 36.0 };
         node.y = if state.y > 0.0 { state.y } else { 520.0 };
@@ -2228,7 +2264,14 @@ impl RuntimeTraceApi {
 }
 
 pub(crate) fn wrap_text_to_state(text: &str, state: &TextState) -> String {
-    wrap_text_to_state_with_map(text, &[], state).0
+    wrap_text_to_state_with_map(
+        text,
+        &[],
+        state,
+        state.font_size.max(1.0) as i32 as f32,
+        true,
+    )
+    .0
 }
 
 pub(crate) fn parse_and_wrap_message(
@@ -2253,7 +2296,7 @@ pub(crate) fn parse_and_wrap_with_registry(
     link_color: Option<u32>,
 ) -> ParsedMessageMarkup {
     let parsed = parse_message_markup_with(text, registry, link_color);
-    wrap_parsed_message(parsed, state).0
+    wrap_parsed_message(parsed, state, state.font_size.max(1.0) as i32 as f32, true).0
 }
 
 /// Wrap parsed message text to the window. Returns the map from each
@@ -2261,8 +2304,16 @@ pub(crate) fn parse_and_wrap_with_registry(
 fn wrap_parsed_message(
     parsed: ParsedMessageMarkup,
     state: &TextState,
+    kinsoku_margin: f32,
+    hanging_ignores_margin: bool,
 ) -> (ParsedMessageMarkup, Vec<usize>) {
-    let (wrapped, map) = wrap_text_to_state_with_map(&parsed.text, &parsed.ruby_spans, state);
+    let (wrapped, map) = wrap_text_to_state_with_map(
+        &parsed.text,
+        &parsed.ruby_spans,
+        state,
+        kinsoku_margin,
+        hanging_ignores_margin,
+    );
     let ruby_spans = parsed
         .ruby_spans
         .into_iter()
@@ -2444,6 +2495,8 @@ fn wrap_text_to_state_with_map(
     text: &str,
     protected_spans: &[RuntimeRubySpan],
     state: &TextState,
+    kinsoku_margin: f32,
+    hanging_ignores_margin: bool,
 ) -> (String, Vec<usize>) {
     let size = state.font_size.max(1.0);
     let bound = state.width.max(120.0);
@@ -2464,6 +2517,7 @@ fn wrap_text_to_state_with_map(
     let mut line_x = 0.0f32;
     let mut lines = 1usize;
     let mut index = 0usize;
+    let mut hang_through = 0usize;
     while index < chars.len() {
         map[index] = output_chars;
         if chars[index] == '\n' {
@@ -2499,12 +2553,19 @@ fn wrap_text_to_state_with_map(
                 .sum::<f32>();
             // sub_435290's rule for bitmap text: keep one font height free
             // at the right edge unless the word ends in hanging punctuation.
-            let reserve = if crate::text_layout::HANGING.contains(chars[index + length - 1]) {
+            let reserve = if hanging_ignores_margin
+                && crate::text_layout::HANGING.contains(chars[index + length - 1])
+            {
+                hang_through = index + length;
                 0.0
             } else {
-                size
+                kinsoku_margin
             };
-            if word + reserve > bound { chunk_width } else { word + reserve }
+            if word + reserve > bound {
+                chunk_width + reserve
+            } else {
+                word + reserve
+            }
         } else if single && is_kinsoku_line_end(chars[index]) {
             chunk_width
                 + chars
@@ -2512,13 +2573,25 @@ fn wrap_text_to_state_with_map(
                     .filter(|ch| **ch != '\n')
                     .map(|ch| advance(*ch))
                     .unwrap_or_default()
+                + kinsoku_margin
         } else {
+            let run = chars[chunk_end..]
+                .iter()
+                .take_while(|ch| **ch != '\n' && is_kinsoku_line_start(**ch))
+                .copied()
+                .collect::<Vec<_>>();
+            let last = run.last().unwrap_or(&chars[chunk_end - 1]);
+            let hanging = index < hang_through || crate::text_layout::HANGING.contains(*last);
+            if hanging && hanging_ignores_margin {
+                hang_through = hang_through.max(chunk_end + run.len());
+            }
             chunk_width
-                + chars[chunk_end..]
-                    .iter()
-                    .take_while(|ch| **ch != '\n' && is_kinsoku_line_start(**ch))
-                    .map(|ch| advance(*ch))
-                    .sum::<f32>()
+                + run.iter().map(|ch| advance(*ch)).sum::<f32>()
+                + if hanging && hanging_ignores_margin {
+                    0.0
+                } else {
+                    kinsoku_margin
+                }
         };
         if line_x > 0.0 && line_x + needed > bound {
             if lines >= max_lines {
@@ -2599,9 +2672,10 @@ pub(crate) fn ruby_draw_runs(
                 + x_units * node.size
                 + (body_width - reading_width) * 0.5
                 + node.size * 0.125
-                + layout.ruby_x_offset;
+                + layout.ruby_x_offset
+                + layout.ruby_effect_inset.0;
             let main_y = node.y + layout.body_y_offset + line as f32 * layout.line_height;
-            let y = main_y + layout.ruby_y_offset - layout.ruby_height;
+            let y = main_y + layout.ruby_y_offset - layout.ruby_height + layout.ruby_effect_inset.1;
             Some((span.reading.clone(), x, y, layout.ruby_height))
         })
         .collect()
@@ -2630,6 +2704,94 @@ mod tests {
     };
     use crate::ruby_registry::RubyRegistry;
     use crate::text_anim::RuntimeTimelineMark;
+
+    #[test]
+    fn native_text_options_message_wrap_uses_the_signed_margin() {
+        let mut config = crate::graph_config::RuntimeGraphConfig::default();
+        let state = narrow_text_state();
+        for (multiple, first_line) in [
+            (0, "甲乙丙丁戊己庚辛"),
+            (1, "甲乙丙丁戊己庚"),
+            (2, "甲乙丙丁戊己"),
+            (-1, "甲乙丙丁戊己庚辛壬"),
+        ] {
+            config.text_global_properties.insert(0x8000_0007, multiple);
+            let (text, _) = super::wrap_text_to_state_with_map(
+                "甲乙丙丁戊己庚辛壬癸",
+                &[],
+                &state,
+                config.text_kinsoku_margin(state.font_size as i32) as f32,
+                config.text_hanging_ignores_margin(),
+            );
+            assert_eq!(text.lines().next().unwrap(), first_line);
+        }
+    }
+
+    #[test]
+    fn native_text_options_ruby_effect_inset_moves_only_the_reading() {
+        let mut config = crate::graph_config::RuntimeGraphConfig::default();
+        let node = super::RuntimeTextNode {
+            text: "本文".into(),
+            enabled: true,
+            owner_object: None,
+            screen_attached: true,
+            target_surface: None,
+            x: 40.0,
+            y: 30.0,
+            size: 20.0,
+            line_height: 24.0,
+            formatted_layout: true,
+            color: [1.0; 4],
+            z: 0,
+            style_spans: Vec::new(),
+            ruby_spans: vec![crate::text_anim::RuntimeRubySpan {
+                start_char: 0,
+                end_char: 2,
+                reading: "ほんぶん".into(),
+            }],
+        };
+        let base = super::RuntimeFormattedTextLayout {
+            body_y_offset: 10.0,
+            line_height: 24.0,
+            ruby_height: 10.0,
+            ruby_x_offset: 0.0,
+            ruby_y_offset: 0.0,
+            ruby_effect_inset: (0.0, 0.0),
+        };
+        let original = super::ruby_draw_runs(&node, base);
+        for enabled in [1, -7] {
+            config.text_global_properties.insert(0x8000_0008, enabled);
+            let shifted = super::RuntimeFormattedTextLayout {
+                ruby_effect_inset: config.text_ruby_effect_inset(3, 2),
+                ..base
+            };
+            let runs = super::ruby_draw_runs(&node, shifted);
+            assert_eq!(runs[0].1, original[0].1 + 3.0);
+            assert_eq!(runs[0].2, original[0].2 + 2.0);
+            assert_eq!(shifted.body_y_offset, base.body_y_offset);
+        }
+        config.text_global_properties.insert(0x8000_0008, 0);
+        assert_eq!(config.text_ruby_effect_inset(3, 2), (0.0, 0.0));
+        assert_eq!((node.x, node.y), (40.0, 30.0));
+        let plain = super::RuntimeFormattedTextLayout::plain(&node);
+        assert_eq!(plain.body_y_offset, 0.0);
+        assert_eq!(plain.ruby_effect_inset, (0.0, 0.0));
+        assert!(super::ruby_draw_runs(&node, plain).is_empty());
+    }
+
+    #[test]
+    fn native_text_options_elapsed_reveal_is_independent_of_frame_partition() {
+        let mut one = crate::text_anim::TextRuntime::default();
+        one.set_glyph_delay_ms(10);
+        one.start_message("甲乙丙丁".into(), 1);
+        let mut split = one.clone();
+        one.tick(35);
+        split.tick(5);
+        split.tick(30);
+        assert_eq!(one.visible_chars, 3);
+        assert_eq!(one.visible_chars, split.visible_chars);
+        assert_eq!(one.next_glyph_remaining_ms, split.next_glyph_remaining_ms);
+    }
 
     fn narrow_text_state() -> TextState {
         TextState {
@@ -2709,7 +2871,9 @@ mod tests {
     fn a_word_longer_than_a_line_wraps_by_glyph() {
         assert_eq!(
             wrap_text_to_state(&"a".repeat(25), &latin_text_state()),
-            format!("{}\n{}", "a".repeat(20), "a".repeat(5))
+            // Native kinsoku reserves one font height even for a word
+            // which must be split into individual glyphs.
+            format!("{}\n{}", "a".repeat(18), "a".repeat(7))
         );
     }
 
@@ -2743,14 +2907,14 @@ mod tests {
     fn wrapping_remaps_target_style_spans_across_inserted_newlines() {
         let parsed =
             parse_and_wrap_styled_message("甲乙丙丁戊己庚<b>辛壬</b>癸", &narrow_text_state());
-        assert_eq!(parsed.text, "甲乙丙丁戊己庚辛\n壬癸");
+        assert_eq!(parsed.text, "甲乙丙丁戊己庚\n辛壬癸");
         assert_eq!(parsed.style_spans.len(), 1);
         assert_eq!(
             (
                 parsed.style_spans[0].start_char,
                 parsed.style_spans[0].end_char
             ),
-            (7, 10)
+            (8, 10)
         );
         assert!(parsed.style_spans[0].style.bold);
     }
@@ -2784,19 +2948,19 @@ mod tests {
             &mut RubyRegistry::default(),
             None,
         );
-        assert_eq!(parsed.text, "甲乙丙丁戊己庚辛\n壬癸");
+        assert_eq!(parsed.text, "甲乙丙丁戊己庚\n辛壬癸");
         assert_eq!(
             (
                 parsed.link_spans[0].start_char,
                 parsed.link_spans[0].end_char
             ),
-            (7, 10)
+            (8, 10)
         );
         assert_eq!(
             parsed.timeline,
             vec![
                 RuntimeTimelineMark::SetTime {
-                    at_char: 7,
+                    at_char: 8,
                     units: 3
                 },
                 RuntimeTimelineMark::Event {
@@ -2809,7 +2973,7 @@ mod tests {
         let records = link_fragment_records(&parsed, &narrow_text_state());
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].text, "辛壬");
-        // Seven full-width glyphs at 15 px on the first row.
-        assert_eq!((records[0].x, records[0].y), (105, 0));
+        // The kinsoku reserve moves the fragment to the second row.
+        assert_eq!((records[0].x, records[0].y), (0, 20));
     }
 }

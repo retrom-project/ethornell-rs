@@ -289,7 +289,7 @@ impl RuntimeTraceApi {
         Ok(())
     }
 
-    pub(super) fn dispatch_system91_03_1f(
+    pub(super) fn dispatch_system91_00_1f(
         &mut self,
         call: &mut ethornell_vm::NativeCallFrame,
     ) -> Option<ethornell_vm::VmResult<ethornell_vm::Value>> {
@@ -299,6 +299,13 @@ impl RuntimeTraceApi {
         let id = call.id();
         let stack = call.args_mut();
         let value = match id {
+            0x00 => {
+                // Extended legacy 48BD60 -> 46BE40 retains the integer unchanged.
+                // 46BF10 uses nonzero values in the forced idle present path.
+                self.graph_presentation
+                    .set_force_present(pop_int_value(stack).unwrap_or_default());
+                ethornell_vm::Value::None
+            }
             // The VM owns the BP source pointer and performs the exact copy.
             0x03 => {
                 unreachable!("0x91:03 is handled by the VM binary-cache pointer bridge")
@@ -1245,7 +1252,7 @@ impl RuntimeTraceApi {
                 // property. Wonderful Everyday's boot script (a different BGI)
                 // sets 0x80000004 and carries on in the original: an unknown
                 // property is ignored.
-                if matches!(property, 0 | 0x8000_0000 | 0x8000_0001 | 0x8000_0002) {
+                if matches!(property, 0 | 0x8000_0000 | 0x8000_0001 | 0x8000_0002 | 0x8000_0006..=0x8000_0008) {
                     if property == 0x8000_0001 && value < 0 {
                         return Some(Err(ethornell_vm::VmError::Runtime(format!(
                             "無効なファンクションパラメータ [ {value} ] が指定されました"

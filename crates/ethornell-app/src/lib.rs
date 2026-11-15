@@ -35,6 +35,8 @@ mod graph_config;
 mod font_transform;
 mod game_font;
 mod graph_defaults;
+mod graph_presentation;
+mod glyph_images;
 mod graph_effect;
 #[cfg(not(any(target_arch = "wasm32", target_os = "vita", target_os = "horizon")))]
 mod graph_flash;
@@ -87,6 +89,7 @@ mod scene;
 mod snapshot;
 #[cfg(desktop_host)]
 mod text_encoding;
+mod installed_folders;
 #[cfg(desktop_host)]
 pub use text_encoding::TextEncoding;
 mod surface_controls;
@@ -237,6 +240,7 @@ struct NativeRuntimeProfile {
     se_channels: usize,
     modern_gradient_blur: bool,
     modern_pointer_tags: bool,
+    unicode_glyph_bridge: bool,
     main_code_bytes: u32,
     main_data_bytes: u32,
 }
@@ -248,6 +252,7 @@ impl Default for NativeRuntimeProfile {
             se_channels: 64,
             modern_gradient_blur: false,
             modern_pointer_tags: false,
+            unicode_glyph_bridge: false,
             main_code_bytes: 0x80000,
             main_data_bytes: 0x40000,
         }
@@ -452,6 +457,7 @@ pub fn run(config: AppConfig) -> Result<()> {
         !headless,
         encoding,
     ));
+    let _glyph_session = runtime.as_ref().map(|runtime| runtime.api.glyph_images.enter_session());
     let image: Option<DecodedImage> = None;
     if config.trace
         && let Some(image) = image.as_ref()
@@ -983,6 +989,7 @@ struct RuntimeTraceApi {
     bitmap_auxiliary_pairs: BTreeMap<i32, [i32; 2]>,
     graph_surfaces: BTreeMap<i32, RuntimeSurface>,
     /// Graph90:9E horizontal glyph strip registration state.
+    glyph_images: glyph_images::GlyphImages,
     fullwidth_glyph_bitmap: Option<i32>,
     fullwidth_glyph_count: i32,
     fullwidth_glyph_cell_width: i32,
@@ -1020,12 +1027,8 @@ struct RuntimeTraceApi {
     /// Target pixel/raster format mode and the derived component layout.
     graph_raster_format_mode: i32,
     graph_raster_layout: (i32, i32, i32),
-    /// dword_506BD4 (Graph90:01): the main loop presents only while set.
-    graph_scheduler_enabled: bool,
-    /// dword_506BCC: milliseconds between presented frames (1000 / rate).
-    graph_frame_interval_ms: u32,
-    /// dword_566758: clock value of the next presentation.
-    graph_next_present_ms: u32,
+    /// Scheduled presentation (90:01/02) and the extended forced idle path (91:00).
+    graph_presentation: graph_presentation::GraphPresentation,
     /// dword_565D50: the DCCache byte budget (0 = no cache).
     graph_memory_limit: u32,
     /// dword_565D50: the DCCache, present while Graph90:03 set a budget.
@@ -1331,6 +1334,7 @@ struct RuntimeTraceApi {
     /// Portable backend for Windows-only registry/installer metadata. Native
     /// selectors remain unbound until their target parameter contracts close.
     platform_store: platform::PortablePlatformStore,
+    mounted_installations: installed_folders::MountedInstallations,
     call_coverage_enabled: bool,
     call_coverage: BTreeMap<(u8, u16), usize>,
     total_native_calls: u64,
@@ -1370,8 +1374,10 @@ impl RuntimeTraceApi {
             // dword_507650 starts at -1: link glyphs keep the surrounding colour.
             system92_text_render_override: -1,
             window_mode: 0,
-            screen_width: 1280,
-            screen_height: 720,
+            // Keep the initial canvas consistent with default display mode 2.
+            // Scripts that keep that mode need no ConfigureDisplayMode call.
+            screen_width: 800,
+            screen_height: 600,
             // dword_506B8C / dword_506BAC.
             display_mode_sizes: [
                 Some((320, 240)),
@@ -1466,6 +1472,7 @@ impl RuntimeTraceApi {
             bitmap_formats: BTreeMap::new(),
             bitmap_auxiliary_pairs: BTreeMap::new(),
             graph_surfaces: BTreeMap::new(),
+            glyph_images: glyph_images::GlyphImages::default(),
             fullwidth_glyph_bitmap: None,
             fullwidth_glyph_count: 0,
             fullwidth_glyph_cell_width: 0,
@@ -1486,9 +1493,7 @@ impl RuntimeTraceApi {
             graph_bitmap_unblend_color: 0,
             graph_raster_format_mode: 0,
             graph_raster_layout: (0, 0, 1),
-            graph_scheduler_enabled: true,
-            graph_frame_interval_ms: 16,
-            graph_next_present_ms: 0,
+            graph_presentation: graph_presentation::GraphPresentation::default(),
             graph_memory_limit: 0,
             graph_dc_cache: None,
             graph_redraw_requested: None,
@@ -1717,6 +1722,7 @@ impl RuntimeTraceApi {
             native_user: native_user::NativeUserState::default(),
             native_effect: native_effect::NativeEffectState::default(),
             platform_store: platform::PortablePlatformStore::from_environment(),
+            mounted_installations: installed_folders::MountedInstallations::from_resources(),
             call_coverage_enabled: std::env::var_os("ETHORNELL_CALL_COVERAGE").is_some(),
             call_coverage: BTreeMap::new(),
             total_native_calls: 0,
@@ -3790,19 +3796,17 @@ impl RuntimeTraceApi {
     /// The portable compositor re-derives every frame from the display tree,
     /// so a redraw counts as requested on every pass.
     pub(crate) fn take_present_due(&mut self) -> bool {
-        if !self.graph_scheduler_enabled {
-            return false;
-        }
         let now = self.clock_base_ms.wrapping_add(self.engine_time_ms as u32);
-        if self.graph_next_present_ms > now {
-            return false;
+        match self.graph_presentation.take_due(now) {
+            graph_presentation::Presentation::Scheduled => {
+                self.graph_redraw_requested = None;
+                true
+            }
+            // Native 46BF10's forced idle path neither consumes a pending
+            // redraw nor advances the deadline of the next scheduled frame.
+            graph_presentation::Presentation::Forced => true,
+            graph_presentation::Presentation::None => false,
         }
-        let interval = self.graph_frame_interval_ms.max(1);
-        self.graph_redraw_requested = None;
-        self.graph_next_present_ms = self
-            .graph_next_present_ms
-            .wrapping_add(interval.wrapping_mul((now - self.graph_next_present_ms) / interval + 1));
-        true
     }
 
     /// BGI 1.652 Sys81:0E (0x494B70 -> 0x467430) reads the initialized
@@ -9681,6 +9685,7 @@ impl RuntimeEngine {
         );
         vm.set_native_abi_profile(profile.abi);
         vm.set_modern_pointer_tags(profile.modern_pointer_tags);
+        vm.set_unicode_glyph_bridge(profile.unicode_glyph_bridge);
         vm.set_graph_text_encoding(encoding);
         vm.start(&program);
         Self {
@@ -12383,17 +12388,17 @@ mod input_tests {
 
         let mut scheduler = vec![Value::Int(0)];
         call_graph(&mut api, 0x90, 0x01, &mut scheduler).unwrap();
-        assert!(!api.graph_scheduler_enabled);
+        assert!(!api.graph_presentation.enabled());
 
         let mut frame_rate = vec![Value::Int(1000)];
         call_graph(&mut api, 0x90, 0x02, &mut frame_rate).unwrap();
-        assert_eq!(api.graph_frame_interval_ms, 1);
+        assert_eq!(api.graph_presentation.interval_ms(), 1);
         let mut invalid_frame_rate = vec![Value::Int(1001)];
         assert!(call_graph(&mut api, 0x90, 0x02, &mut invalid_frame_rate).is_err());
         // Wonderful Everyday's boot script passes 0: the rate stays.
         let mut zero_frame_rate = vec![Value::Int(0)];
         call_graph(&mut api, 0x90, 0x02, &mut zero_frame_rate).unwrap();
-        assert_eq!(api.graph_frame_interval_ms, 1);
+        assert_eq!(api.graph_presentation.interval_ms(), 1);
         let mut negative_frame_rate = vec![Value::Int(-1)];
         assert!(call_graph(&mut api, 0x90, 0x02, &mut negative_frame_rate).is_err());
 
@@ -12406,16 +12411,16 @@ mod input_tests {
         let bitmap = 3790;
         let mut create = vec![Value::Int(bitmap)];
         call_graph(&mut api, 0x90, 0x04, &mut create).unwrap();
-        assert_eq!(api.bitmap_dimensions[&bitmap], (1280, 720));
+        assert_eq!(api.bitmap_dimensions[&bitmap], (800, 600));
         assert_eq!(api.bitmap_formats[&bitmap], 1);
-        assert_eq!(api.graph_surfaces[&bitmap].width, 1280.0);
-        assert_eq!(api.graph_surfaces[&bitmap].height, 720.0);
+        assert_eq!(api.graph_surfaces[&bitmap].width, 800.0);
+        assert_eq!(api.graph_surfaces[&bitmap].height, 600.0);
         assert!(!api.graph_config.bitmap_priorities.contains_key(&bitmap));
 
         let prioritized = 3791;
         let mut create_prioritized = vec![Value::Int(prioritized), Value::Int(1791)];
         call_graph(&mut api, 0x90, 0x05, &mut create_prioritized).unwrap();
-        assert_eq!(api.bitmap_dimensions[&prioritized], (1280, 720));
+        assert_eq!(api.bitmap_dimensions[&prioritized], (800, 600));
         assert_eq!(api.graph_config.bitmap_priorities[&prioritized], 1791);
         let captured = &api.graph_resources[&prioritized];
         assert_eq!(
@@ -22112,11 +22117,12 @@ impl ethornell_vm::SysApi for RuntimeTraceApi {
                     }
                     return Ok(Some(self.host.request_retry(text(2), file)));
                 }
-                if (g == 0x80 && matches!(id, 0x3B | 0x3F | 0xE1 | 0xF0..=0xFC))
+                if (g == 0x80 && matches!(id, 0x3B | 0x3F | 0xE1 | 0xF0..=0xF7 | 0xF9..=0xFC))
                     || (g == 0x81 && matches!(id, 0x20 | 0x22..=0x26 | 0x38 | 0x3A | 0x3B))
                     || (g == 0xB0 && id == 0xF0)
                 {
                     self.last_native_call = Some(*opcode);
+                    self.host.unsupported("filesystem/platform/installer");
                     return Err(VmError::Runtime(
                         "unsupported filesystem/platform/installer host capability".into(),
                     ));
@@ -22136,6 +22142,7 @@ impl ethornell_vm::SysApi for RuntimeTraceApi {
                     )
                 } else if g == 0xB0 && matches!(id, 0x84..=0x8F) {
                     self.last_native_call = Some(*opcode);
+                    self.host.unsupported("host dialog/input/media retry");
                     return Err(VmError::Runtime(
                         "unsupported host dialog/input/media retry capability".into(),
                     ));
@@ -23687,8 +23694,12 @@ impl ethornell_vm::SysApi for RuntimeTraceApi {
 
     fn read_installed_folder(&mut self, vendor: &str, product: &str) -> Option<String> {
         if file_policy::restricted() {
-            self.host.unsupported("installer metadata");
-            return None;
+            // Sys80:F8 has a normal not-found result. An optional installation
+            // lookup must not turn the absence of metadata into a fatal error.
+            // A package's own installation snapshot relocates to this mount;
+            // no native registry or historical external path is ever read.
+            return self.mounted_installations.contains(vendor, product)
+                .then(|| "bgi-resource\\".into());
         }
         if let Some(path) = host_installer::read_installed_folder(vendor, product) {
             return Some(path);
@@ -26215,7 +26226,7 @@ impl ethornell_vm::GraphApi for RuntimeTraceApi {
             (0x90, 0x01) => {
                 // sub_479ED0 -> sub_462260: dword_506BD4.
                 let enabled = pop_int_value(stack).unwrap_or_default() != 0;
-                self.graph_scheduler_enabled = enabled;
+                self.graph_presentation.set_enabled(enabled);
                 tracing::debug!(enabled, "GraphSetSchedulerEnabled");
                 trace_graph!(self, "graph scheduler enabled={enabled}");
             }
@@ -26233,8 +26244,7 @@ impl ethornell_vm::GraphApi for RuntimeTraceApi {
                             frame_rate as i32
                         )));
                     }
-                    self.graph_frame_interval_ms = (1000 / frame_rate).max(1);
-                    self.graph_next_present_ms = 0;
+                    self.graph_presentation.set_rate(frame_rate);
                 }
             }
             (0x90, 0x03) => {
@@ -29312,6 +29322,17 @@ impl ethornell_vm::SoundApi for RuntimeTraceApi {
         (0..2)
             .filter_map(|id| self.native_user.font_face(id).map(str::to_owned))
             .collect()
+    }
+
+    fn user_font_catalog(&self) -> Vec<ethornell_vm::FontFamily> {
+        // These existing logical faces resolve to the bundled CJK fallback,
+        // which renders Latin, Japanese, Simplified and Traditional Chinese.
+        // Arbitrary interned names are not an installed-font inventory.
+        ethornell_vm::SoundApi::user_font_families(self).into_iter().map(|name| ethornell_vm::FontFamily {
+            name,
+            charsets: vec![0, 128, 134, 136],
+            pitch_and_family: 2,
+        }).collect()
     }
 
     fn show_user_dialog(

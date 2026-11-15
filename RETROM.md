@@ -9,6 +9,11 @@ The authoritative baseline, ABI and immutable release names are in `retrom-fork.
 
 Use Rust 1.100.0 with `wasm32-unknown-unknown`, Node 24, Python 3 and
 wasm-bindgen CLI 0.2.130. `WASM_BINDGEN` can select the pinned CLI executable.
+The host regression suite also requires Chrome. Set `CHROME_BIN` to an existing
+Chrome executable, or install the browser selected by the locked `playwright-core`
+package into an explicit `PLAYWRIGHT_BROWSERS_PATH` with
+`npm exec --prefix platform/retrom -- playwright-core install chromium` after
+`npm ci --prefix platform/retrom`.
 The package lock pins esbuild. The build downloads a pinned OFL font and verifies
 its SHA-256 and license before using either.
 
@@ -37,6 +42,69 @@ The returned session exposes frames/status, export/acknowledge, screenshot,
 pause/resume, volume and close. Keyboard and pointer input stay independent of
 the host's standard-gamepad pointer mapping. Pause and exit release held input.
 Rendering uses the game's native dimensions rather than scaling to the viewport.
+
+Optional installed-folder queries (Sys80:F8) return the native not-found result
+when the restricted host has no installation metadata. They do not access the
+operating-system registry. Registry mutations and other denied host operations
+remain errors; cleanup preserves the original capability failure.
+Root-level registry snapshots can declare this mounted installation through a
+`HKLM\\Software[\\Wow6432Node]\\company\\product` `InstalledFolder` string.
+The reader accepts bounded UTF-16LE or UTF-8 registry text and matches the ANSI
+key bytes represented by CP932/GBK. A single declared location relocates to the
+read-only resource mount; unrelated components and ambiguous multiple locations
+remain not found. The reader never executes registry text or opens its old paths.
+
+## Extended graphics contracts
+
+The extended legacy Graph91 ABI supports `91:00`: consume one raw integer,
+push no result, and present idle frames for any nonzero value. A forced frame
+leaves the next scheduled deadline and pending redraw intact. The older ABI's
+null slot stays unsupported. The ABI follows the existing bounded executable
+structure detector; game names and hashes do not select this behavior.
+
+The same extended ABI accepts `81:00` encoding mode 0 (CP932) or 1 (UTF-8)
+and returns acceptance. Invalid values leave the current mode unchanged. This
+does not enable the absent `81:01..03` language slots.
+
+Extended system calls also provide fixed CP932-to-UTF-8 conversion, the native
+three-way byte probe and grouped sentence tables. The probe distinguishes ASCII
+from candidate UTF-8 and follows the native three-multibyte-sequence limit; it is
+not a general Unicode validator. Sentence imports replace the supplied groups,
+preserve other groups and accept last-value duplicate registrations. Null input
+clears all groups. Imports remain bounded and fully validated before mutation;
+malformed input leaves prior registrations intact. Lookup detects its input
+encoding independently of the current mode, supports length queries and preserves
+the destination on a miss. Raw guest bytes take precedence over decoded shadows.
+
+The extended `B0:C5` font enumeration consumes destination and charset. A null
+destination queries packed-name bytes; a nonnull destination receives consecutive
+NUL-terminated names and returns the family count. The extended `C4` shares that
+path for charset 128. Names use the current encoding. The portable catalog exposes
+only the existing renderable CJK aliases, with Latin/Japanese/Chinese capabilities;
+it does not enumerate arbitrary interned names or claim Windows-installed fonts.
+The extended `C6` takes an output pointer and a face name, independently detects
+the input encoding, and writes only the pitch DWORD for a case-insensitive exact
+match. A miss returns zero without changing the output. It does not treat the
+output pointer as text. The older ABI's null `C5` slot remains an error. Invalid
+heap frees stay errors.
+
+The native text scale setter accepts zero and clears the reciprocal to select
+natural glyph metrics. Text properties `80000007` and `80000008` preserve the
+signed kinsoku margin multiplier and nonzero ruby effect inset respectively.
+The retained compositor redraws started glyphs from elapsed engine time, including
+when `80000006` requests full message repaint. These contracts do not imply that
+all nonzero native text scale factors or every movie path are implemented.
+
+Inline bitmap glyphs retain an independent cropped image after their source
+bitmap is released. Text and ruby use that image's natural width and original
+color; clearing a registered slot makes it empty. Sessions keep separate tables.
+The extended ABI accepts explicit tagged Unicode slots. A separate bounded PE
+capability match detects wrappers that tag codes using the current UTF-8 flag;
+direct-forwarding wrappers and older validators retain their own code ranges.
+
+The candidate build runs owned BP/PackFile and synthetic PE fixtures through the
+actual Chrome/Wasm interpreter. It also runs the shared presentation scheduler
+and bitmap text layout unit tests without requiring the desktop movie backend.
 
 ## Native saves
 
